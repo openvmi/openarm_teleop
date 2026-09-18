@@ -18,7 +18,7 @@
 #include <unistd.h>
 
 #include <iostream>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
+#include <openarm/oy_motor/oy_motor_constants.hpp>
 #include <vector>
 
 constexpr double PI = 3.14159265358979323846;
@@ -63,32 +63,34 @@ static const double velocity_limit_F[] = {8.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0, 8.0
 static const double effort_limit_L[] = {20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0};
 static const double effort_limit_F[] = {20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0, 20.0};
 
-// Motor configuration structure
+// Motor configuration structure (OY motors)
 struct MotorConfig {
-    std::vector<openarm::damiao_motor::MotorType> arm_motor_types;
+    std::vector<openarm::oy_motor::MotorType> arm_motor_types;
     std::vector<uint32_t> arm_send_can_ids;
     std::vector<uint32_t> arm_recv_can_ids;
-    openarm::damiao_motor::MotorType gripper_motor_type;
+    openarm::oy_motor::MotorType gripper_motor_type;
     uint32_t gripper_send_can_id;
     uint32_t gripper_recv_can_id;
 };
 
-// Global default motor configuration
+// Global default motor configuration for OY openarm (GIM motors).
+// Must stay in sync with openarm_hardware/oy_hardware.cpp
+// (DEFAULT_MOTOR_TYPES / DEFAULT_SEND_CAN_IDS / DEFAULT_RECV_CAN_IDS).
 static const MotorConfig DEFAULT_MOTOR_CONFIG = {
-    // Standard 7-DOF arm motor configuration
-    {openarm::damiao_motor::MotorType::DM8009, openarm::damiao_motor::MotorType::DM8009,
-     openarm::damiao_motor::MotorType::DM4340, openarm::damiao_motor::MotorType::DM4340,
-     openarm::damiao_motor::MotorType::DM4310, openarm::damiao_motor::MotorType::DM4310,
-     openarm::damiao_motor::MotorType::DM4310},
+    // OY 7-DOF arm motor configuration
+    {openarm::oy_motor::MotorType::GIM8115_9p, openarm::oy_motor::MotorType::GIM8115_9p,
+     openarm::oy_motor::MotorType::GIM4310_40, openarm::oy_motor::MotorType::GIM4310_40,
+     openarm::oy_motor::MotorType::GIM4315_8, openarm::oy_motor::MotorType::GIM4315_8,
+     openarm::oy_motor::MotorType::GIM4315_8},
 
-    // Standard CAN IDs for arm motors
+    // OY CAN IDs for arm motors
+    {0x101, 0x102, 0x103, 0x104, 0x105, 0x106, 0x107},
     {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07},
-    {0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17},
 
-    // Standard gripper configuration
-    openarm::damiao_motor::MotorType::DM4310,
-    0x08,
-    0x18};
+    // OY gripper configuration
+    openarm::oy_motor::MotorType::GIM4315_8,
+    0x108,
+    0x08};
 
 // opening function
 inline void printOpenArmBanner() {

@@ -20,7 +20,7 @@
 #include <filesystem>
 #include <iostream>
 #include <openarm/can/socket/openarm.hpp>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
+#include <openarm/oy_motor/oy_motor_constants.hpp>
 #include <openarm_port/openarm_init.hpp>
 #include <periodic_timer_thread.hpp>
 #include <robot_state.hpp>
@@ -194,9 +194,9 @@ int main(int argc, char **argv) {
         }
 
         // Setup dynamics
-        std::string root_link = "openarm_body_link0";
-        std::string leaf_link =
-            (arm_side == "left_arm") ? "openarm_left_hand" : "openarm_right_hand";
+        std::string arm_prefix = (arm_side == "left_arm") ? "left_" : "right_";
+        std::string root_link = "openarm_" + arm_prefix + "link0";
+        std::string leaf_link = "openarm_" + arm_prefix + "hand";
 
         // Output confirmation
         std::cout << "=== OpenArm Unilateral Control ===" << std::endl;
@@ -235,11 +235,11 @@ int main(int argc, char **argv) {
 
         std::cout << "=== Initializing Leader OpenArm ===" << std::endl;
         openarm::can::socket::OpenArm *leader_openarm =
-            openarm_init::OpenArmInitializer::initialize_openarm(leader_can_interface, true);
+            openarm_init::OpenArmInitializer::initialize_openarm(leader_can_interface, false);
 
         std::cout << "=== Initializing Follower OpenArm ===" << std::endl;
         openarm::can::socket::OpenArm *follower_openarm =
-            openarm_init::OpenArmInitializer::initialize_openarm(follower_can_interface, true);
+            openarm_init::OpenArmInitializer::initialize_openarm(follower_can_interface, false);
 
         size_t leader_arm_motor_num = leader_openarm->get_arm().get_motors().size();
         size_t follower_arm_motor_num = follower_openarm->get_arm().get_motors().size();

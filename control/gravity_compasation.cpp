@@ -19,7 +19,7 @@
 #include <filesystem>
 #include <iostream>
 #include <openarm/can/socket/openarm.hpp>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
+#include <openarm/oy_motor/oy_motor_constants.hpp>
 #include <openarm_port/openarm_init.hpp>
 #include <thread>
 
@@ -67,16 +67,16 @@ int main(int argc, char** argv) {
         std::cout << "CAN interface  : " << can_interface << std::endl;
         std::cout << "URDF path      : " << urdf_path << std::endl;
 
-        std::string root_link = "openarm_body_link0";
-        std::string leaf_link =
-            (arm_side == "left_arm") ? "openarm_left_hand" : "openarm_right_hand";
+        std::string arm_prefix = (arm_side == "left_arm") ? "left_" : "right_";
+        std::string root_link = "openarm_" + arm_prefix + "link0";
+        std::string leaf_link = "openarm_" + arm_prefix + "hand";
 
         Dynamics arm_dynamics(urdf_path, root_link, leaf_link);
         arm_dynamics.Init();
 
         std::cout << "=== Initializing Leader OpenArm ===" << std::endl;
         openarm::can::socket::OpenArm* openarm =
-            openarm_init::OpenArmInitializer::initialize_openarm(can_interface, true);
+            openarm_init::OpenArmInitializer::initialize_openarm(can_interface, false);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         auto start_time = std::chrono::high_resolution_clock::now();
@@ -122,13 +122,14 @@ int main(int argc, char** argv) {
                 // std::cout << "grav_torques[" << i << "] = " << grav_torques[i] << std::endl;
             }
 
-            std::vector<openarm::damiao_motor::MITParam> cmds;
+            // NOTE: OY MITParam field order is {q, dq, kp, kd, tau}
+            std::vector<openarm::oy_motor::MITParam> cmds;
             cmds.reserve(grav_torques.size());
 
             std::transform(grav_torques.begin(), grav_torques.end(), std::back_inserter(cmds),
-                           [](double t) { return openarm::damiao_motor::MITParam{0, 0, 0, 0, t}; });
+                           [](double t) { return openarm::oy_motor::MITParam{0, 0, 0, 0, t}; });
 
-            openarm->get_arm().mit_control_all(cmds);
+            openarm->get_arm().oy_mit_control_all(cmds);
 
             openarm->recv_all();
         }

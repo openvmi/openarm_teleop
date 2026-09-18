@@ -29,29 +29,30 @@ public:
     /**
      * @brief Initialize OpenArm with default configuration
      * @param can_device CAN device name (e.g., "can0", "can1")
-     * @param enable_debug Enable debug output
+     * @param can_fd Enable CAN-FD frames on the socket (default false: the OY
+     *               arms run classic CAN at 1 Mbps, see init_can.sh and the
+     *               can_fd:=false default in oy.urdf.xacro)
      * @return Initialized OpenArm pointer (caller owns memory)
      */
     static openarm::can::socket::OpenArm *initialize_openarm(const std::string &can_device,
-                                                             bool enable_debug = true);
+                                                             bool can_fd = false);
 
     /**
      * @brief Initialize OpenArm with custom motor configuration
      * @param can_device CAN device name
      * @param config Custom motor configuration
-     * @param enable_debug Enable debug output
+     * @param can_fd Enable CAN-FD frames on the socket (default false, classic CAN)
      * @return Initialized OpenArm pointer (caller owns memory)
      */
     static openarm::can::socket::OpenArm *initialize_openarm(const std::string &can_device,
                                                              const MotorConfig &config,
-                                                             bool enable_debug = true);
+                                                             bool can_fd = false);
 
 private:
     /**
      * @brief Common initialization steps for OpenArm
      */
-    static void initialize_(openarm::can::socket::OpenArm *openarm, const MotorConfig &config,
-                            bool enable_debug);
+    static void initialize_(openarm::can::socket::OpenArm *openarm, const MotorConfig &config);
 };
 
 }  // namespace openarm_init

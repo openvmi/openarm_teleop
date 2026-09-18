@@ -23,7 +23,7 @@
 #include <memory>
 #include <numeric>
 #include <openarm/can/socket/openarm.hpp>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
+#include <openarm/oy_motor/oy_motor_constants.hpp>
 #include <openarm_constants.hpp>
 #include <robot_state.hpp>
 #include <utility>

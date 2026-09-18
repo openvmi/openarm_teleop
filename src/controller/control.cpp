@@ -184,27 +184,28 @@ bool Control::bilateral_step() {
         openarmgripperjointconverter_->joint_to_motor(joint_gripper_states_ref);
 
     // kp kd q dq tau
-    std::vector<openarm::damiao_motor::MITParam> arm_cmds;
+    // NOTE: OY MITParam field order is {q, dq, kp, kd, tau}
+    std::vector<openarm::oy_motor::MITParam> arm_cmds;
     arm_cmds.reserve(arm_dof);
     for (size_t i = 0; i < arm_dof; ++i) {
-        arm_cmds.emplace_back(openarm::damiao_motor::MITParam{
-            Kp_[i], Kd_[i], motor_arm_states[i].position, motor_arm_states[i].velocity,
+        arm_cmds.emplace_back(openarm::oy_motor::MITParam{
+            motor_arm_states[i].position, motor_arm_states[i].velocity, Kp_[i], Kd_[i],
             motor_arm_states[i].effort});
     }
 
     // gripper command mit param
-    std::vector<openarm::damiao_motor::MITParam> gripper_cmds;
+    std::vector<openarm::oy_motor::MITParam> gripper_cmds;
     gripper_cmds.reserve(gripper_dof);
     for (size_t i = 0; i < gripper_dof; ++i) {
-        gripper_cmds.emplace_back(openarm::damiao_motor::MITParam{
-            Kp_[i + arm_dof], Kd_[i + arm_dof], motor_gripper_states[i].position,
-            motor_gripper_states[i].velocity, motor_gripper_states[i].effort});
+        gripper_cmds.emplace_back(openarm::oy_motor::MITParam{
+            motor_gripper_states[i].position, motor_gripper_states[i].velocity,
+            Kp_[i + arm_dof], Kd_[i + arm_dof], motor_gripper_states[i].effort});
     }
 
     // send command to arm
-    openarm_->get_arm().mit_control_all(arm_cmds);
+    openarm_->get_arm().oy_mit_control_all(arm_cmds);
     // send command to gripper
-    openarm_->get_gripper().mit_control_all(gripper_cmds);
+    openarm_->get_gripper().oy_mit_control_all(gripper_cmds);
 
     std::this_thread::sleep_for(std::chrono::microseconds(200));
 
@@ -291,25 +292,26 @@ bool Control::unilateral_step() {
             openarmgripperjointconverter_->joint_to_motor(joint_gripper_state_torque);
 
         // arm command mit param
-        std::vector<openarm::damiao_motor::MITParam> arm_cmds;
+        // NOTE: OY MITParam field order is {q, dq, kp, kd, tau}
+        std::vector<openarm::oy_motor::MITParam> arm_cmds;
         arm_cmds.reserve(arm_dof);
         for (size_t i = 0; i < arm_dof; ++i) {
             arm_cmds.emplace_back(
-                openarm::damiao_motor::MITParam{0.0, 0.0, 0.0, 0.0, motor_arm_states[i].effort});
+                openarm::oy_motor::MITParam{0.0, 0.0, 0.0, 0.0, motor_arm_states[i].effort});
         }
 
         // gripper command mit param
-        std::vector<openarm::damiao_motor::MITParam> gripper_cmds;
+        std::vector<openarm::oy_motor::MITParam> gripper_cmds;
         gripper_cmds.reserve(gripper_dof);
         for (size_t i = 0; i < gripper_dof; ++i) {
-            gripper_cmds.emplace_back(openarm::damiao_motor::MITParam{
-                0.0, 0.0, 0.0, 0.0, motor_gripper_states[i].effort});
+            gripper_cmds.emplace_back(
+                openarm::oy_motor::MITParam{0.0, 0.0, 0.0, 0.0, motor_gripper_states[i].effort});
         }
 
         // send command to arm
-        openarm_->get_arm().mit_control_all(arm_cmds);
+        openarm_->get_arm().oy_mit_control_all(arm_cmds);
         // send command to gripper
-        openarm_->get_gripper().mit_control_all(gripper_cmds);
+        openarm_->get_gripper().oy_mit_control_all(gripper_cmds);
 
         openarm_->recv_all(200);
 
@@ -329,23 +331,23 @@ bool Control::unilateral_step() {
         std::vector<MotorState> hand_motor_refs =
             openarmgripperjointconverter_->joint_to_motor(joint_hand_states_ref);
 
-        std::vector<openarm::damiao_motor::MITParam> arm_cmds;
+        std::vector<openarm::oy_motor::MITParam> arm_cmds;
         arm_cmds.reserve(arm_motor_refs.size());
         for (size_t i = 0; i < arm_motor_refs.size(); ++i) {
-            arm_cmds.emplace_back(openarm::damiao_motor::MITParam{
-                Kp_[i], Kd_[i], arm_motor_refs[i].position, arm_motor_refs[i].velocity, 0.0});
+            arm_cmds.emplace_back(openarm::oy_motor::MITParam{
+                arm_motor_refs[i].position, arm_motor_refs[i].velocity, Kp_[i], Kd_[i], 0.0});
         }
 
-        std::vector<openarm::damiao_motor::MITParam> hand_cmds;
+        std::vector<openarm::oy_motor::MITParam> hand_cmds;
         hand_cmds.reserve(hand_motor_refs.size());
         for (size_t i = 0; i < hand_motor_refs.size(); ++i) {
-            hand_cmds.emplace_back(openarm::damiao_motor::MITParam{
-                Kp_[i + arm_dof], Kd_[i + arm_dof], hand_motor_refs[i].position,
-                hand_motor_refs[i].velocity, 0.0});
+            hand_cmds.emplace_back(openarm::oy_motor::MITParam{
+                hand_motor_refs[i].position, hand_motor_refs[i].velocity,
+                Kp_[i + arm_dof], Kd_[i + arm_dof], 0.0});
         }
 
-        openarm_->get_arm().mit_control_all(arm_cmds);
-        openarm_->get_gripper().mit_control_all(hand_cmds);
+        openarm_->get_arm().oy_mit_control_all(arm_cmds);
+        openarm_->get_gripper().oy_mit_control_all(hand_cmds);
 
         openarm_->recv_all(200);
 
@@ -433,24 +435,25 @@ bool Control::AdjustPosition(void) {
         std::vector<MotorState> hand_motor_refs =
             openarmgripperjointconverter_->joint_to_motor(joint_hand_interp);
 
-        std::vector<openarm::damiao_motor::MITParam> arm_cmds;
+        std::vector<openarm::oy_motor::MITParam> arm_cmds;
         arm_cmds.reserve(arm_motor_refs.size());
         for (size_t i = 0; i < arm_motor_refs.size(); ++i) {
-            arm_cmds.emplace_back(openarm::damiao_motor::MITParam{kp_arm_temp[i], kd_arm_temp[i],
-                                                                  arm_motor_refs[i].position,
-                                                                  arm_motor_refs[i].velocity, 0.0});
+            arm_cmds.emplace_back(openarm::oy_motor::MITParam{arm_motor_refs[i].position,
+                                                              arm_motor_refs[i].velocity,
+                                                              kp_arm_temp[i], kd_arm_temp[i], 0.0});
         }
 
-        std::vector<openarm::damiao_motor::MITParam> hand_cmds;
+        std::vector<openarm::oy_motor::MITParam> hand_cmds;
         hand_cmds.reserve(hand_motor_refs.size());
         for (size_t i = 0; i < hand_motor_refs.size(); ++i) {
-            hand_cmds.emplace_back(openarm::damiao_motor::MITParam{
-                kp_hand_temp[i], kd_hand_temp[i], hand_motor_refs[i].position,
-                hand_motor_refs[i].velocity, 0.0});
+            hand_cmds.emplace_back(
+                openarm::oy_motor::MITParam{hand_motor_refs[i].position,
+                                            hand_motor_refs[i].velocity, kp_hand_temp[i],
+                                            kd_hand_temp[i], 0.0});
         }
 
-        openarm_->get_arm().mit_control_all(arm_cmds);
-        openarm_->get_gripper().mit_control_all(hand_cmds);
+        openarm_->get_arm().oy_mit_control_all(arm_cmds);
+        openarm_->get_gripper().oy_mit_control_all(hand_cmds);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
