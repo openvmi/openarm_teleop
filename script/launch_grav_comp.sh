@@ -15,8 +15,9 @@
 # limitations under the License.
 
 # ======== Configuration ========
-ARM_SIDE=${1:-right_arm} # Required: left_arm or right_arm
-CAN_IF=$2                # Optional: CAN interface
+ARM_SIDE=${1:-right_arm}  # Required: left_arm or right_arm
+CAN_IF=$2                 # Optional: CAN interface
+GRAVITY_SCALE=$3          # Optional: gravity-compensation scale (default 1.0)
 TMPDIR="/tmp/openarm_urdf_gen"
 
 WS_DIR=${OPENARM_WS:-/home/ligx/workspace/openarm}
@@ -28,7 +29,7 @@ BIN_PATH="$WS_DIR/build/openarm_teleop/gravity_comp"
 # Validate arm side
 if [[ "$ARM_SIDE" != "right_arm" && "$ARM_SIDE" != "left_arm" ]]; then
     echo "[ERROR] Invalid arm_side: $ARM_SIDE"
-    echo "Usage: $0 <arm_side: right_arm|left_arm> [can_if]"
+    echo "Usage: $0 <arm_side: right_arm|left_arm> [can_if] [gravity_scale]"
     exit 1
 fi
 
@@ -78,7 +79,11 @@ fi
 # Run binary from the package root
 echo "[INFO] Launching gravity compensation..."
 cd "$PKG_DIR"
-"$BIN_PATH" "$ARM_SIDE" "$CAN_IF" "$URDF_OUT"
+if [ -n "$GRAVITY_SCALE" ]; then
+    "$BIN_PATH" "$ARM_SIDE" "$CAN_IF" "$URDF_OUT" "$GRAVITY_SCALE"
+else
+    "$BIN_PATH" "$ARM_SIDE" "$CAN_IF" "$URDF_OUT"
+fi
 
 # Cleanup
 echo "[INFO] Cleaning up tmp dir..."

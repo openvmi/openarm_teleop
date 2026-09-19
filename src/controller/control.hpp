@@ -71,6 +71,9 @@ public:
     std::shared_ptr<RobotSystemState> reference_;
 
     std::vector<double> Dn_, Kp_, Kd_, Fc_, k_, Fv_, Fo_;
+    // Scale factor applied to the gravity-compensation feedforward torque.
+    // Mirrors gravity_compensation_scale in openarm_hardware/oy_hardware.
+    double gravity_scale_ = 1.0;
 
     // bool Setup(void);
     void Setstate(int state);
@@ -79,6 +82,9 @@ public:
     void SetParameter(const std::vector<double> &Kp, const std::vector<double> &Kd,
                       const std::vector<double> &Fc, const std::vector<double> &k,
                       const std::vector<double> &Fv, const std::vector<double> &Fo);
+
+    // Set the gravity-compensation feedforward scale (default 1.0).
+    void SetGravityCompensationScale(double scale);
 
     bool AdjustPosition(void);
 

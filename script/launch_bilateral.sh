@@ -15,9 +15,11 @@
 # limitations under the License.
 
 # ========= Configuration =========
-ARM_SIDE=${1:-right_arm} # Required: left_arm or right_arm
-LEADER_CAN_IF=$2         # Optional: leader CAN interface
-FOLLOWER_CAN_IF=$3       # Optional: follower CAN interface
+ARM_SIDE=${1:-right_arm}   # Required: left_arm or right_arm
+LEADER_CAN_IF=$2           # Optional: leader CAN interface
+FOLLOWER_CAN_IF=$3         # Optional: follower CAN interface
+LEADER_GRAVITY_SCALE=$4    # Optional: leader gravity-compensation scale (overrides yaml)
+FOLLOWER_GRAVITY_SCALE=$5  # Optional: follower gravity-compensation scale (requires $4)
 TMPDIR="/tmp/openarm_urdf_gen"
 
 WS_DIR=${OPENARM_WS:-/home/ligx/workspace/openarm}
@@ -28,7 +30,7 @@ BIN_PATH="$WS_DIR/build/openarm_teleop/bilateral_control"
 # Validate arm side
 if [[ "$ARM_SIDE" != "right_arm" && "$ARM_SIDE" != "left_arm" ]]; then
     echo "[ERROR] Invalid arm_side: $ARM_SIDE"
-    echo "Usage: $0 <arm_side: right_arm|left_arm> [leader_can_if] [follower_can_if]"
+    echo "Usage: $0 <arm_side: right_arm|left_arm> [leader_can_if] [follower_can_if] [leader_gravity_scale] [follower_gravity_scale]"
     exit 1
 fi
 
@@ -91,7 +93,22 @@ cp "$LEADER_URDF_PATH" "$FOLLOWER_URDF_PATH"
 # Run binary from the package root (YamlLoader loads relative config/*.yaml)
 echo "[INFO] Launching bilateral control..."
 cd "$PKG_DIR"
-"$BIN_PATH" "$LEADER_URDF_PATH" "$FOLLOWER_URDF_PATH" "$ARM_SIDE" "$LEADER_CAN_IF" "$FOLLOWER_CAN_IF"
+
+# Pass gravity scale overrides when provided (follower scale requires the
+# leader scale due to positional argument order).
+if [ -n "$FOLLOWER_GRAVITY_SCALE" ] && [ -z "$LEADER_GRAVITY_SCALE" ]; then
+    echo "[ERROR] follower_gravity_scale (arg 5) requires leader_gravity_scale (arg 4)." >&2
+    exit 1
+fi
+GRAVITY_SCALE_ARGS=()
+if [ -n "$LEADER_GRAVITY_SCALE" ]; then
+    GRAVITY_SCALE_ARGS+=("$LEADER_GRAVITY_SCALE")
+fi
+if [ -n "$FOLLOWER_GRAVITY_SCALE" ]; then
+    GRAVITY_SCALE_ARGS+=("$FOLLOWER_GRAVITY_SCALE")
+fi
+
+"$BIN_PATH" "$LEADER_URDF_PATH" "$FOLLOWER_URDF_PATH" "$ARM_SIDE" "$LEADER_CAN_IF" "$FOLLOWER_CAN_IF" "${GRAVITY_SCALE_ARGS[@]}"
 
 # Cleanup
 echo "[INFO] Cleaning up temporary files..."

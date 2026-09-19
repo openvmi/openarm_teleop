@@ -31,6 +31,10 @@ FollowerArmParam:
   # DEFAULT_KP/DEFAULT_KD (field-proven on the OY arms).
   Kp: [40.0, 40.0, 15.0, 15.0, 2.0, 2.0, 2.0, 5.0]
   Kd: [2.0, 2.0, 1.5, 1.2, 0.2, 0.2, 0.2, 0.1]
+  # Gravity-compensation feedforward scale, same semantics as
+  # gravity_compensation_scale in openarm_hardware/oy_hardware
+  # (1.0 = full compensation, 0.0 = disabled).
+  gravity_compensation_scale: 0.3
   # Friction compensation disabled for the first runs; tune after the
   # basic leader-follower loop is verified.
   Fc: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

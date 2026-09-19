@@ -156,10 +156,13 @@ int main(int argc, char **argv) {
         std::string follower_can_interface = "can2";
 
         if (argc < 3) {
-            std::cerr
-                << "Usage: " << argv[0]
-                << " <leader_urdf_path> <follower_urdf_path> [arm_side] [leader_can] [follower_can]"
-                << std::endl;
+            std::cerr << "Usage: " << argv[0]
+                      << " <leader_urdf_path> <follower_urdf_path> [arm_side] [leader_can] "
+                         "[follower_can] [leader_gravity_scale] [follower_gravity_scale]"
+                      << std::endl;
+            std::cerr << "Note: gravity scales are optional CLI overrides of the yaml "
+                         "gravity_compensation_scale (leader.yaml / follower.yaml)."
+                      << std::endl;
             return 1;
         }
 
@@ -218,6 +221,10 @@ int main(int argc, char **argv) {
         std::vector<double> leader_k = leader_loader.get_vector("LeaderArmParam", "k");
         std::vector<double> leader_Fv = leader_loader.get_vector("LeaderArmParam", "Fv");
         std::vector<double> leader_Fo = leader_loader.get_vector("LeaderArmParam", "Fo");
+        double leader_gravity_scale =
+            leader_loader.has("LeaderArmParam", "gravity_compensation_scale")
+                ? leader_loader.get_double("LeaderArmParam", "gravity_compensation_scale")
+                : 1.0;
 
         // Follower parameters
         std::vector<double> follower_kp = follower_loader.get_vector("FollowerArmParam", "Kp");
@@ -226,6 +233,18 @@ int main(int argc, char **argv) {
         std::vector<double> follower_k = follower_loader.get_vector("FollowerArmParam", "k");
         std::vector<double> follower_Fv = follower_loader.get_vector("FollowerArmParam", "Fv");
         std::vector<double> follower_Fo = follower_loader.get_vector("FollowerArmParam", "Fo");
+        double follower_gravity_scale =
+            follower_loader.has("FollowerArmParam", "gravity_compensation_scale")
+                ? follower_loader.get_double("FollowerArmParam", "gravity_compensation_scale")
+                : 1.0;
+
+        // Optional: command-line gravity scale overrides (argv[6]/argv[7]),
+        // applied after the yaml values so the CLI wins when provided.
+        if (argc >= 7) leader_gravity_scale = std::stod(argv[6]);
+        if (argc >= 8) follower_gravity_scale = std::stod(argv[7]);
+
+        std::cout << "Gravity comp scale - leader: " << leader_gravity_scale
+                  << ", follower: " << follower_gravity_scale << std::endl;
 
         Dynamics *leader_arm_dynamics = new Dynamics(leader_urdf_path, root_link, leaf_link);
         leader_arm_dynamics->Init();
@@ -271,6 +290,9 @@ int main(int argc, char **argv) {
 
         control_follower->SetParameter(follower_kp, follower_kd, follower_Fc, follower_k,
                                        follower_Fv, follower_Fo);
+
+        control_leader->SetGravityCompensationScale(leader_gravity_scale);
+        control_follower->SetGravityCompensationScale(follower_gravity_scale);
 
         // set home postion
         std::thread thread_l(&Control::AdjustPosition, control_leader);

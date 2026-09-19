@@ -60,7 +60,29 @@ bool Dynamics::Init() {
     gravity_forces.data.setZero();
     inertia_matrix.data.setZero();
 
-    solver = std::make_unique<KDL::ChainDynParam>(kdl_chain, KDL::Vector(0, 0.0, -9.81));
+    // Gravity vector expressed in the chain (arm base) frame, following the
+    // openarm_hardware/oy_hardware.cpp implementation: in the bimanual URDF
+    // the arm roots openarm_{left|right}_link0 are mounted with +/-90 deg
+    // rotations relative to the tree root, so the world gravity (0, 0, -9.81)
+    // must be rotated into the chain base frame before handing it to
+    // ChainDynParam. Using the world vector directly made the compensation
+    // torque push in wrong directions and destabilized the arms.
+    KDL::Vector world_gravity(0.0, 0.0, -9.81);
+    KDL::Vector chain_gravity = world_gravity;
+    const std::string tree_root = kdl_tree.getRootSegment()->first;
+    if (start_link != tree_root) {
+        KDL::Chain chain_to_arm;
+        if (kdl_tree.getChain(tree_root, start_link, chain_to_arm)) {
+            KDL::Frame T = KDL::Frame::Identity();
+            for (unsigned i = 0; i < chain_to_arm.getNrOfSegments(); ++i)
+                T = T * chain_to_arm.getSegment(i).pose(0.0);
+            chain_gravity = T.M.Inverse() * world_gravity;
+        }
+    }
+    std::cout << "[Dynamics] gravity vector in chain base frame: (" << chain_gravity.x()
+              << ", " << chain_gravity.y() << ", " << chain_gravity.z() << ")" << std::endl;
+
+    solver = std::make_unique<KDL::ChainDynParam>(kdl_chain, chain_gravity);
 
     return true;
 }

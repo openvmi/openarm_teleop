@@ -90,6 +90,8 @@ void Control::SetParameter(const std::vector<double>& Kp, const std::vector<doub
     Fo_ = Fo;
 }
 
+void Control::SetGravityCompensationScale(double scale) { gravity_scale_ = scale; }
+
 bool Control::bilateral_step() {
     // get motor status
     std::vector<MotorState> arm_motor_states;
@@ -171,7 +173,7 @@ bool Control::bilateral_step() {
 
     // set gravity and friciton comp joint torque value
     for (size_t i = 0; i < arm_dof; i++) {
-        joint_arm_states_ref[i].effort = gravity[i] + friction[i];
+        joint_arm_states_ref[i].effort = gravity_scale_ * gravity[i] + friction[i];
     }
 
     for (size_t i = 0; i < gripper_dof; i++) {
@@ -275,7 +277,8 @@ bool Control::unilateral_step() {
         for (size_t i = 0; i < arm_dof; ++i) {
             joint_arm_state_torque[i].position = joint_arm_positions[i];
             joint_arm_state_torque[i].velocity = joint_arm_velocities[i];
-            joint_arm_state_torque[i].effort = gravity[i] + friction[i] * 0.3 + coriolis[i] * 0.1;
+            joint_arm_state_torque[i].effort =
+                gravity_scale_ * gravity[i] + friction[i] * 0.3 + coriolis[i] * 0.1;
         }
 
         // gripper joint state

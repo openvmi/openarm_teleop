@@ -40,9 +40,10 @@ int main(int argc, char** argv) {
         std::string can_interface = "can0";
 
         if (argc < 4) {
-            std::cerr << "Usage: " << argv[0] << " <arm_side> <can_interface> <urdf_path>"
+            std::cerr << "Usage: " << argv[0]
+                      << " <arm_side> <can_interface> <urdf_path> [gravity_scale]"
                       << std::endl;
-            std::cerr << "Example: " << argv[0] << " right_arm can0 /tmp/v10_bimanual.urdf"
+            std::cerr << "Example: " << argv[0] << " right_arm can0 /tmp/oy_bimanual.urdf 1.0"
                       << std::endl;
             return 1;
         }
@@ -50,6 +51,13 @@ int main(int argc, char** argv) {
         arm_side = argv[1];
         can_interface = argv[2];
         std::string urdf_path = argv[3];
+
+        // Optional: gravity-compensation scale (default 1.0), same semantics
+        // as gravity_compensation_scale in openarm_hardware/oy_hardware.
+        double gravity_scale = 1.0;
+        if (argc >= 5) {
+            gravity_scale = std::stod(argv[4]);
+        }
 
         if (arm_side != "left_arm" && arm_side != "right_arm") {
             std::cerr << "[ERROR] Invalid arm_side: " << arm_side
@@ -66,6 +74,7 @@ int main(int argc, char** argv) {
         std::cout << "Arm side       : " << arm_side << std::endl;
         std::cout << "CAN interface  : " << can_interface << std::endl;
         std::cout << "URDF path      : " << urdf_path << std::endl;
+        std::cout << "Gravity scale  : " << gravity_scale << std::endl;
 
         std::string arm_prefix = (arm_side == "left_arm") ? "left_" : "right_";
         std::string root_link = "openarm_" + arm_prefix + "link0";
@@ -126,8 +135,11 @@ int main(int argc, char** argv) {
             std::vector<openarm::oy_motor::MITParam> cmds;
             cmds.reserve(grav_torques.size());
 
-            std::transform(grav_torques.begin(), grav_torques.end(), std::back_inserter(cmds),
-                           [](double t) { return openarm::oy_motor::MITParam{0, 0, 0, 0, t}; });
+            std::transform(
+                grav_torques.begin(), grav_torques.end(), std::back_inserter(cmds),
+                [gravity_scale](double t) {
+                    return openarm::oy_motor::MITParam{0, 0, 0, 0, gravity_scale * t};
+                });
 
             openarm->get_arm().oy_mit_control_all(cmds);
 
