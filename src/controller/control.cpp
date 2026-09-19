@@ -59,6 +59,7 @@ Control::Control(openarm::can::socket::OpenArm* arm, Dynamics* dynamics_l, Dynam
 Control::~Control() {
     std::cout << "Control destructed " << std::endl;
     delete openarmjointconverter_;
+    delete openarmgripperjointconverter_;
     delete differentiator_;
 }
 
@@ -82,6 +83,11 @@ void Control::Shutdown(void) {
 void Control::SetParameter(const std::vector<double>& Kp, const std::vector<double>& Kd,
                            const std::vector<double>& Fc, const std::vector<double>& k,
                            const std::vector<double>& Fv, const std::vector<double>& Fo) {
+    const size_t count = arm_motor_num_ + hand_motor_num_;
+    if (Kp.size() != count || Kd.size() != count || Fc.size() != count || k.size() != count ||
+        Fv.size() != count || Fo.size() != count) {
+        throw std::invalid_argument("Control parameters must include every arm and gripper motor");
+    }
     Kp_ = Kp;
     Kd_ = Kd;
     Fc_ = Fc;
@@ -94,15 +100,15 @@ void Control::SetGravityCompensationScale(double scale) { gravity_scale_ = scale
 
 // Mirrors the ramp advancement in openarm_hardware's write() real-mode branch:
 // the factor only ever advances (never resets mid-run) and saturates at 1.0.
-void Control::AdvanceGravityRamp() {
+void Control::AdvanceGravityRamp(double period) {
     if (gravity_ramp_factor_ < 1.0) {
-        gravity_ramp_factor_ += Ts_ / GRAVITY_RAMP_DURATION;
+        gravity_ramp_factor_ += period / GRAVITY_RAMP_DURATION;
         if (gravity_ramp_factor_ > 1.0) gravity_ramp_factor_ = 1.0;
     }
 }
 
 bool Control::bilateral_step() {
-    AdvanceGravityRamp();
+    AdvanceGravityRamp(Ts_);
 
     // get motor status
     std::vector<MotorState> arm_motor_states;
@@ -151,7 +157,6 @@ bool Control::bilateral_step() {
     }
 
     std::vector<double> gravity(arm_dof, 0.0);
-    std::vector<double> coriolis(arm_dof, 0.0);
     std::vector<double> friction(arm_dof + gripper_dof, 0.0);
 
     std::vector<JointState> joint_arm_states_ref = robot_state_->arm_state().get_all_references();
@@ -164,22 +169,13 @@ bool Control::bilateral_step() {
         joint_arm_positions_ref[i] = joint_arm_states_ref[i].position;
     }
 
-    if (role_ == ROLE_LEADER) {
-        dynamics_l_->GetGravity(joint_arm_positions.data(), gravity.data());
-        dynamics_l_->GetCoriolis(joint_arm_positions.data(), joint_arm_velocities.data(),
-                                 coriolis.data());
-
-    } else if (role_ == ROLE_FOLLOWER) {
-        dynamics_f_->GetGravity(joint_arm_positions.data(), gravity.data());
-        dynamics_f_->GetCoriolis(joint_arm_positions.data(), joint_arm_velocities.data(),
-                                 coriolis.data());
-    }
+    ComputeGravity(joint_arm_positions.data(), gravity.data());
 
     // Friction (compute joint friction)
     for (size_t i = 0; i < joint_arm_velocities.size(); ++i)
-        ComputeFriction(joint_arm_velocities.data(), friction.data(), i);
+        ComputeFriction(joint_arm_velocities[i], friction.data(), i);
     for (size_t i = 0; i < joint_gripper_velocities.size(); ++i)
-        ComputeFriction(joint_gripper_velocities.data(), friction.data(),
+        ComputeFriction(joint_gripper_velocities[i], friction.data(),
                         joint_arm_velocities.size() + i);
 
     // set gravity and friciton comp joint torque value
@@ -230,7 +226,7 @@ bool Control::bilateral_step() {
 }
 
 bool Control::unilateral_step() {
-    AdvanceGravityRamp();
+    AdvanceGravityRamp(Ts_);
 
     // get motor status
     std::vector<MotorState> arm_motor_states;
@@ -248,6 +244,11 @@ bool Control::unilateral_step() {
         openarmjointconverter_->motor_to_joint(arm_motor_states);
     std::vector<JointState> joint_gripper_states =
         openarmgripperjointconverter_->motor_to_joint(gripper_motor_states);
+
+    for (size_t i = 0; i < joint_arm_states.size(); ++i)
+        joint_arm_states[i].feedback_time = openarm_->get_arm().get_motors()[i].last_feedback();
+    for (size_t i = 0; i < joint_gripper_states.size(); ++i)
+        joint_gripper_states[i].feedback_time = openarm_->get_gripper().get_motors()[i].last_feedback();
 
     // set reponse
     robot_state_->arm_state().set_all_responses(joint_arm_states);
@@ -277,15 +278,18 @@ bool Control::unilateral_step() {
 
     if (role_ == ROLE_LEADER) {
         // calc dynamics
-        dynamics_l_->GetGravity(joint_arm_positions.data(), gravity.data());
-        dynamics_l_->GetCoriolis(joint_arm_positions.data(), joint_arm_velocities.data(),
-                                 coriolis.data());
+        ComputeGravity(joint_arm_positions.data(), gravity.data());
+        if (dynamics_l_ && dynamics_l_->IsValid() &&
+            dynamics_l_->GetJointCount() == arm_dof) {
+            dynamics_l_->GetCoriolis(joint_arm_positions.data(), joint_arm_velocities.data(),
+                                     coriolis.data());
+        }
 
         for (size_t i = 0; i < joint_arm_velocities.size(); ++i)
-            ComputeFriction(joint_arm_velocities.data(), friction.data(), i);
+            ComputeFriction(joint_arm_velocities[i], friction.data(), i);
 
         for (size_t i = 0; i < joint_gripper_velocities.size(); ++i)
-            ComputeFriction(joint_gripper_velocities.data(), friction.data(), arm_dof + i);
+            ComputeFriction(joint_gripper_velocities[i], friction.data(), arm_dof + i);
 
         // arm joint state
         std::vector<JointState> joint_arm_state_torque(arm_dof);
@@ -332,13 +336,15 @@ bool Control::unilateral_step() {
         // send command to gripper
         openarm_->get_gripper().oy_mit_control_all(gripper_cmds);
 
-        openarm_->recv_all(200);
+        ReceiveFeedback();
 
         return true;
 
     }
 
     else if (role_ == ROLE_FOLLOWER) {
+        UpdateUnilateralReferences();
+        ComputeGravity(joint_arm_positions.data(), gravity.data());
         std::vector<JointState> joint_arm_states_ref =
             robot_state_->arm_state().get_all_references();
         std::vector<JointState> joint_hand_states_ref =
@@ -354,7 +360,8 @@ bool Control::unilateral_step() {
         arm_cmds.reserve(arm_motor_refs.size());
         for (size_t i = 0; i < arm_motor_refs.size(); ++i) {
             arm_cmds.emplace_back(openarm::oy_motor::MITParam{
-                arm_motor_refs[i].position, arm_motor_refs[i].velocity, Kp_[i], Kd_[i], 0.0});
+                arm_motor_refs[i].position, arm_motor_refs[i].velocity, Kp_[i], Kd_[i],
+                gravity_ramp_factor_ * gravity_scale_ * gravity[i]});
         }
 
         std::vector<openarm::oy_motor::MITParam> hand_cmds;
@@ -368,7 +375,7 @@ bool Control::unilateral_step() {
         openarm_->get_arm().oy_mit_control_all(arm_cmds);
         openarm_->get_gripper().oy_mit_control_all(hand_cmds);
 
-        openarm_->recv_all(200);
+        ReceiveFeedback();
 
         return true;
     }
@@ -376,12 +383,92 @@ bool Control::unilateral_step() {
     return true;
 }
 
-void Control::ComputeFriction(const double* velocity, double* friction, size_t index) {
+void Control::PublishFeedback() {
+    std::vector<JointState> arm_states;
+    std::vector<JointState> hand_states;
+    // OY motors map directly to joints. Publish immediately after reception.
+    for (const auto& motor : openarm_->get_arm().get_motors())
+        arm_states.push_back({motor.get_position(), motor.get_velocity(), 0.0,
+                              motor.last_feedback()});
+    for (const auto& motor : openarm_->get_gripper().get_motors())
+        hand_states.push_back({motor.get_position(), motor.get_velocity(), 0.0,
+                               motor.last_feedback()});
+    robot_state_->arm_state().set_all_responses(arm_states);
+    robot_state_->hand_state().set_all_responses(hand_states);
+}
+
+void Control::ReceiveFeedback() {
+    using Clock = std::chrono::steady_clock;
+    const auto& arm = openarm_->get_arm().get_motors();
+    const auto& hand = openarm_->get_gripper().get_motors();
+    std::vector<Clock::time_point> previous;
+    for (const auto& motor : arm) previous.push_back(motor.last_feedback());
+    for (const auto& motor : hand) previous.push_back(motor.last_feedback());
+    std::vector<bool> received(previous.size(), false);
+    const auto deadline = Clock::now() + std::chrono::milliseconds(8);
+    bool complete = false;
+    do {
+        // Nonblocking drain plus a total budget: an idle gap between USB batches
+        // must not end the cycle before the later motors have replied.
+        openarm_->recv_all(0);
+        for (size_t i = 0; i < arm.size(); ++i)
+            received[i] = arm[i].last_feedback() > previous[i];
+        for (size_t i = 0; i < hand.size(); ++i)
+            received[arm.size() + i] = hand[i].last_feedback() > previous[arm.size() + i];
+        complete = std::all_of(received.begin(), received.end(), [](bool value) { return value; });
+        if (complete || Clock::now() >= deadline) break;
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    } while (true);
+    PublishFeedback();
+    std::lock_guard<std::mutex> lock(feedback_stats_mutex_);
+    ++feedback_stats_.cycles;
+    if (!complete) ++feedback_stats_.timeouts;
+    feedback_stats_.updates.resize(received.size());
+    feedback_stats_.missing.resize(received.size());
+    for (size_t i = 0; i < received.size(); ++i) {
+        if (received[i]) ++feedback_stats_.updates[i];
+        else ++feedback_stats_.missing[i];
+    }
+}
+
+void Control::UpdateUnilateralReferences() {
+    if (!reference_source_) return;
+    const auto now = std::chrono::steady_clock::now();
+    auto update = [&](RobotState& destination, const RobotState& source) {
+        auto targets = destination.get_all_references();
+        const auto samples = source.get_all_responses();
+        if (samples.size() != targets.size())
+            throw std::runtime_error("Leader/follower joint count mismatch");
+        for (size_t i = 0; i < targets.size(); ++i) {
+            if (samples[i].feedback_time.time_since_epoch().count() != 0 &&
+                now - samples[i].feedback_time <= std::chrono::milliseconds(30)) {
+                targets[i] = samples[i];
+            } else {
+                // Keep the last accepted position; never continue a stale velocity.
+                targets[i].velocity = 0.0;
+            }
+        }
+        destination.set_all_references(targets);
+    };
+    update(robot_state_->arm_state(), reference_source_->arm_state());
+    update(robot_state_->hand_state(), reference_source_->hand_state());
+}
+
+void Control::ComputeGravity(const double* position, double* gravity) {
+    std::fill_n(gravity, arm_motor_num_, 0.0);
+    Dynamics* dynamics = role_ == ROLE_LEADER ? dynamics_l_ : dynamics_f_;
+    // A zero scale alone must not allow a mismatched model to overrun the arrays.
+    if (gravity_scale_ == 0.0 || !dynamics || !dynamics->IsValid() ||
+        dynamics->GetJointCount() != arm_motor_num_) return;
+    dynamics->GetGravity(position, gravity);
+}
+
+void Control::ComputeFriction(double velocity, double* friction, size_t index) {
     if (TANHFRIC) {
         const double amp_tmp = 1.0;
         const double coef_tmp = 0.1;
 
-        const double v = velocity[index];
+        const double v = velocity;
         const double Fc = Fc_.at(index);
         const double k = k_.at(index);
         const double Fv = Fv_.at(index);
@@ -389,7 +476,7 @@ void Control::ComputeFriction(const double* velocity, double* friction, size_t i
 
         friction[index] = amp_tmp * Fc * std::tanh(coef_tmp * k * v) + Fv * v + Fo;
     } else {
-        friction[index] = velocity[index] * Dn_.at(index);
+        friction[index] = velocity * Dn_.at(index);
     }
 }
 
@@ -432,7 +519,16 @@ bool Control::AdjustPosition(void) {
     std::vector<double> kp_hand_temp = {10.0};
     std::vector<double> kd_hand_temp = {0.5};
 
+    std::vector<double> measured_positions(arm_motor_num_);
+    std::vector<double> gravity(arm_motor_num_);
     for (int step = 0; step < nstep; ++step) {
+        // Establish feedforward during position holding, using this arm's feedback.
+        // Preserve the ramp across the handover into unilateral/bilateral control.
+        AdvanceGravityRamp(0.01);
+        const auto& motors = openarm_->get_arm().get_motors();
+        for (size_t i = 0; i < arm_motor_num_; ++i)
+            measured_positions[i] = motors[i].get_position();
+        ComputeGravity(measured_positions.data(), gravity.data());
         alpha = static_cast<double>(step + 1) / nstep;
 
         std::vector<JointState> joint_arm_interp(NMOTORS - 1);
@@ -457,9 +553,10 @@ bool Control::AdjustPosition(void) {
         std::vector<openarm::oy_motor::MITParam> arm_cmds;
         arm_cmds.reserve(arm_motor_refs.size());
         for (size_t i = 0; i < arm_motor_refs.size(); ++i) {
-            arm_cmds.emplace_back(openarm::oy_motor::MITParam{arm_motor_refs[i].position,
-                                                              arm_motor_refs[i].velocity,
-                                                              kp_arm_temp[i], kd_arm_temp[i], 0.0});
+            arm_cmds.emplace_back(openarm::oy_motor::MITParam{
+                arm_motor_refs[i].position, arm_motor_refs[i].velocity,
+                kp_arm_temp[i], kd_arm_temp[i],
+                gravity_ramp_factor_ * gravity_scale_ * gravity[i]});
         }
 
         std::vector<openarm::oy_motor::MITParam> hand_cmds;
@@ -496,6 +593,7 @@ bool Control::AdjustPosition(void) {
 
     robot_state_->arm_state().set_all_references(joint_arm_final);
     robot_state_->hand_state().set_all_references(joint_hand_final);
+    PublishFeedback();
 
     return true;
 }

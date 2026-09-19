@@ -57,6 +57,29 @@ class Control {
     static constexpr int VEL_WINDOW_SIZE = 10;
     static constexpr double VIB_THRESHOLD = 0.7;  // [rad/s]
     std::deque<double> velocity_buffer_[NJOINTS];
+    std::shared_ptr<RobotSystemState> reference_source_;
+    void PublishFeedback();
+    void ReceiveFeedback();
+    void UpdateUnilateralReferences();
+
+public:
+    struct FeedbackStats {
+        uint64_t cycles = 0;
+        uint64_t timeouts = 0;
+        std::vector<uint64_t> updates;
+        std::vector<uint64_t> missing;
+    };
+    void SetReferenceSource(std::shared_ptr<RobotSystemState> source) {
+        reference_source_ = std::move(source);
+    }
+    FeedbackStats GetFeedbackStats() const {
+        std::lock_guard<std::mutex> lock(feedback_stats_mutex_);
+        return feedback_stats_;
+    }
+
+private:
+    mutable std::mutex feedback_stats_mutex_;
+    FeedbackStats feedback_stats_;
 
 public:
     Control(openarm::can::socket::OpenArm *arm, Dynamics *dynamics_l, Dynamics *dynamics_f,
@@ -78,8 +101,7 @@ public:
     // Gravity-compensation soft start, mirroring gravity_ramp_factor_ /
     // GRAVITY_RAMP_DURATION in openarm_hardware/oy_hardware: ramps 0 -> 1 over
     // 0.5 s so the feedforward torque does not step in at full magnitude the
-    // instant control starts (avoids the startup jerk/sag the hardware plugin
-    // guards against).
+    // instant position holding starts. The ramp continues across mode handover.
     double gravity_ramp_factor_ = 0.0;
     static constexpr double GRAVITY_RAMP_DURATION = 0.5;  // seconds
 
@@ -94,9 +116,9 @@ public:
     // Set the gravity-compensation feedforward scale (default 1.0).
     void SetGravityCompensationScale(double scale);
 
-    // Advance the gravity-compensation soft-start ramp by one control period,
+    // Advance the gravity-compensation soft-start ramp by the supplied period,
     // mirroring the ramp logic in openarm_hardware's write().
-    void AdvanceGravityRamp();
+    void AdvanceGravityRamp(double period);
 
     bool AdjustPosition(void);
 
@@ -113,7 +135,7 @@ public:
     void ComputeMotorTorque(const double *joint_torque, double *motor_torque);
 
     // void ComputeFriction(const double *velocity, double *friction);
-    void ComputeFriction(const double *velocity, double *friction, size_t index);
+    void ComputeFriction(double velocity, double *friction, size_t index);
     void ComputeGravity(const double *position, double *gravity);
     bool DetectVibration(const double *velocity, bool *what_axis);
 };

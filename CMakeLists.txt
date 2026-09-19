@@ -73,3 +73,27 @@ target_link_libraries(gravity_comp PRIVATE openarm_teleop_lib)
 target_link_libraries(comm_test PRIVATE openarm_teleop_lib)
 target_link_libraries(unilateral_control PRIVATE openarm_teleop_lib)
 target_link_libraries(bilateral_control PRIVATE openarm_teleop_lib)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(teleop_feedback_test tests/teleop_feedback_test.cpp src/controller/control.cpp)
+  target_include_directories(teleop_feedback_test BEFORE PRIVATE tests/fakes src)
+  target_link_libraries(teleop_feedback_test PRIVATE OpenArmCAN::openarm_can)
+  add_test(NAME teleop_feedback COMMAND teleop_feedback_test)
+  add_test(NAME teleop_direct_reference COMMAND teleop_feedback_test direct)
+  add_test(NAME teleop_feedback_timeout COMMAND teleop_feedback_test timeout)
+  add_executable(periodic_timer_test tests/periodic_timer_test.cpp)
+  target_include_directories(periodic_timer_test PRIVATE src)
+  target_link_libraries(periodic_timer_test PRIVATE pthread)
+  add_test(NAME periodic_timer COMMAND periodic_timer_test)
+  # Compile the real control loop against hardware/model doubles, never open CAN.
+  add_executable(gravity_feedforward_test tests/gravity_feedforward_test.cpp
+                 src/controller/control.cpp)
+  target_include_directories(gravity_feedforward_test BEFORE PRIVATE tests/fakes src)
+  target_link_libraries(gravity_feedforward_test PRIVATE OpenArmCAN::openarm_can)
+  foreach(case follower leader follower_startup leader_startup follower_invalid
+               leader_invalid follower_disabled leader_disabled follower_bilateral
+               leader_bilateral leader_friction parameters)
+    add_test(NAME gravity_${case} COMMAND gravity_feedforward_test ${case})
+  endforeach()
+endif()
