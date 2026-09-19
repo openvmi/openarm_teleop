@@ -75,6 +75,14 @@ public:
     // Mirrors gravity_compensation_scale in openarm_hardware/oy_hardware.
     double gravity_scale_ = 1.0;
 
+    // Gravity-compensation soft start, mirroring gravity_ramp_factor_ /
+    // GRAVITY_RAMP_DURATION in openarm_hardware/oy_hardware: ramps 0 -> 1 over
+    // 0.5 s so the feedforward torque does not step in at full magnitude the
+    // instant control starts (avoids the startup jerk/sag the hardware plugin
+    // guards against).
+    double gravity_ramp_factor_ = 0.0;
+    static constexpr double GRAVITY_RAMP_DURATION = 0.5;  // seconds
+
     // bool Setup(void);
     void Setstate(int state);
     void Shutdown(void);
@@ -85,6 +93,10 @@ public:
 
     // Set the gravity-compensation feedforward scale (default 1.0).
     void SetGravityCompensationScale(double scale);
+
+    // Advance the gravity-compensation soft-start ramp by one control period,
+    // mirroring the ramp logic in openarm_hardware's write().
+    void AdvanceGravityRamp();
 
     bool AdjustPosition(void);
 

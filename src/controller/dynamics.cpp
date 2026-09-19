@@ -22,6 +22,10 @@ Dynamics::Dynamics(std::string urdf_path, std::string start_link, std::string en
 
 Dynamics::~Dynamics() {}
 
+bool Dynamics::IsValid() const { return solver != nullptr; }
+
+size_t Dynamics::GetJointCount() const { return kdl_chain.getNrOfJoints(); }
+
 bool Dynamics::Init() {
     std::ifstream file(urdf_path);
     if (!file.is_open()) {
@@ -44,9 +48,33 @@ bool Dynamics::Init() {
         return false;
     }
 
-    if (!kdl_tree.getChain(start_link, end_link, kdl_chain)) {
-        fprintf(stderr, "Failed to get KDL chain\n");
-        return false;
+    // Tip probing, mirroring openarm_hardware/oy_hardware.cpp: with a rohand
+    // (dexterous-hand) end effector the URDF has no "openarm_Xhand" link, so a
+    // hard-coded tip would make getChain fail and silently disable gravity
+    // compensation (or crash later in GetGravity). Fall back to
+    // "openarm_Xrohand_base" like the hardware plugin probes both candidates.
+    {
+        KDL::Chain probe;
+        if (!kdl_tree.getChain(start_link, end_link, probe)) {
+            std::string candidate;
+            if (end_link.length() > 4 &&
+                end_link.substr(end_link.length() - 4) == "hand") {
+                candidate = end_link.substr(0, end_link.length() - 4) + "rohand_base";
+            }
+            if (!candidate.empty() && kdl_tree.getChain(start_link, candidate, probe)) {
+                std::cout << "[Dynamics] tip link '" << end_link
+                          << "' not found — falling back to '" << candidate << "'"
+                          << std::endl;
+                end_link = candidate;
+                kdl_chain = probe;
+            } else {
+                fprintf(stderr, "Failed to get KDL chain %s -> %s\n", start_link.c_str(),
+                        end_link.c_str());
+                return false;
+            }
+        } else {
+            kdl_chain = probe;
+        }
     }
 
     std::cout << "[GetGravity] kdl_chain.getNrOfJoints() = " << kdl_chain.getNrOfJoints()
@@ -90,6 +118,11 @@ bool Dynamics::Init() {
 void Dynamics::GetGravity(const double *motor_position, double *gravity) {
     const auto njoints = kdl_chain.getNrOfJoints();
 
+    // Solver missing (Init() failed): leave the caller-prezeroed output at
+    // zero, mirroring openarm_hardware's gravity_ok=false path — compensation
+    // is skipped instead of dereferencing a null solver.
+    if (!solver) return;
+
     KDL::JntArray q_(kdl_chain.getNrOfJoints());
 
     for (size_t i = 0; i < kdl_chain.getNrOfJoints(); i++) {
@@ -104,6 +137,8 @@ void Dynamics::GetGravity(const double *motor_position, double *gravity) {
 
 void Dynamics::GetCoriolis(const double *motor_position, const double *motor_velocity,
                            double *coriolis) {
+    if (!solver) return;  // same guard as GetGravity
+
     KDL::JntArray q_(kdl_chain.getNrOfJoints());
     KDL::JntArray q_dot(kdl_chain.getNrOfJoints());
 

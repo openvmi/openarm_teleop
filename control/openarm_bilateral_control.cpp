@@ -248,10 +248,20 @@ int main(int argc, char **argv) {
                   << ", follower: " << follower_gravity_scale << std::endl;
 
         Dynamics *leader_arm_dynamics = new Dynamics(leader_urdf_path, root_link, leaf_link);
-        leader_arm_dynamics->Init();
+        if (!leader_arm_dynamics->Init()) {
+            // Mirror openarm_hardware's graceful degradation: a failed KDL
+            // build disables gravity compensation instead of crashing later.
+            std::cerr << "[WARN] Leader dynamics init failed — "
+                         "gravity compensation DISABLED for leader"
+                      << std::endl;
+        }
 
         Dynamics *follower_arm_dynamics = new Dynamics(follower_urdf_path, root_link, leaf_link);
-        follower_arm_dynamics->Init();
+        if (!follower_arm_dynamics->Init()) {
+            std::cerr << "[WARN] Follower dynamics init failed — "
+                         "gravity compensation DISABLED for follower"
+                      << std::endl;
+        }
 
         std::cout << "=== Initializing Leader OpenArm ===" << std::endl;
         openarm::can::socket::OpenArm *leader_openarm =
@@ -270,6 +280,29 @@ int main(int argc, char **argv) {
         std::cout << "follower arm motor num : " << follower_arm_motor_num << std::endl;
         std::cout << "leader hand motor num : " << leader_hand_motor_num << std::endl;
         std::cout << "follower hand motor num : " << follower_hand_motor_num << std::endl;
+
+        // Joint-count validation, mirroring openarm_hardware's
+        // "KDL chain has N joints, expected ARM_DOF — disabled" check.
+        if (leader_arm_dynamics->IsValid() &&
+            leader_arm_dynamics->GetJointCount() != leader_arm_motor_num) {
+            std::cerr << "[WARN] Leader KDL chain has "
+                      << leader_arm_dynamics->GetJointCount()
+                      << " joints, expected " << leader_arm_motor_num
+                      << " — gravity compensation DISABLED for leader" << std::endl;
+            leader_gravity_scale = 0.0;
+        } else if (!leader_arm_dynamics->IsValid()) {
+            leader_gravity_scale = 0.0;
+        }
+        if (follower_arm_dynamics->IsValid() &&
+            follower_arm_dynamics->GetJointCount() != follower_arm_motor_num) {
+            std::cerr << "[WARN] Follower KDL chain has "
+                      << follower_arm_dynamics->GetJointCount()
+                      << " joints, expected " << follower_arm_motor_num
+                      << " — gravity compensation DISABLED for follower" << std::endl;
+            follower_gravity_scale = 0.0;
+        } else if (!follower_arm_dynamics->IsValid()) {
+            follower_gravity_scale = 0.0;
+        }
 
         // Declare robot_state (Joint and motor counts are assumed to be equal)
         std::shared_ptr<RobotSystemState> leader_state =

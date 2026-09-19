@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <controller/dynamics.hpp>
@@ -81,7 +82,13 @@ int main(int argc, char** argv) {
         std::string leaf_link = "openarm_" + arm_prefix + "hand";
 
         Dynamics arm_dynamics(urdf_path, root_link, leaf_link);
-        arm_dynamics.Init();
+        if (!arm_dynamics.Init()) {
+            // Mirror openarm_hardware: a failed KDL build must not be ignored —
+            // GetGravity() would otherwise stay unusable for the whole run.
+            std::cerr << "[ERROR] Dynamics init failed (bad URDF or missing chain "
+                      << root_link << " -> " << leaf_link << ")" << std::endl;
+            return 1;
+        }
 
         std::cout << "=== Initializing Leader OpenArm ===" << std::endl;
         openarm::can::socket::OpenArm* openarm =
@@ -101,6 +108,12 @@ int main(int argc, char** argv) {
                                                      0.0);
 
         std::vector<double> grav_torques(openarm->get_arm().get_motors().size(), 0.0);
+
+        // Soft-start ramp, mirroring gravity_ramp_factor_ /
+        // GRAVITY_RAMP_DURATION in openarm_hardware/oy_hardware (0 -> 1 over
+        // 0.5 s) so full feedforward torque does not step in at startup.
+        constexpr double GRAVITY_RAMP_DURATION = 0.5;  // seconds
+        auto ramp_start_time = std::chrono::high_resolution_clock::now();
 
         while (keep_running) {
             frame_count++;
@@ -135,10 +148,15 @@ int main(int argc, char** argv) {
             std::vector<openarm::oy_motor::MITParam> cmds;
             cmds.reserve(grav_torques.size());
 
+            const double ramp = std::min(
+                1.0, std::chrono::duration<double>(current_time - ramp_start_time).count() /
+                         GRAVITY_RAMP_DURATION);
+
             std::transform(
                 grav_torques.begin(), grav_torques.end(), std::back_inserter(cmds),
-                [gravity_scale](double t) {
-                    return openarm::oy_motor::MITParam{0, 0, 0, 0, gravity_scale * t};
+                [gravity_scale, ramp](double t) {
+                    return openarm::oy_motor::MITParam{0, 0, 0, 0,
+                                                       ramp * gravity_scale * t};
                 });
 
             openarm->get_arm().oy_mit_control_all(cmds);

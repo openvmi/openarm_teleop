@@ -92,7 +92,18 @@ void Control::SetParameter(const std::vector<double>& Kp, const std::vector<doub
 
 void Control::SetGravityCompensationScale(double scale) { gravity_scale_ = scale; }
 
+// Mirrors the ramp advancement in openarm_hardware's write() real-mode branch:
+// the factor only ever advances (never resets mid-run) and saturates at 1.0.
+void Control::AdvanceGravityRamp() {
+    if (gravity_ramp_factor_ < 1.0) {
+        gravity_ramp_factor_ += Ts_ / GRAVITY_RAMP_DURATION;
+        if (gravity_ramp_factor_ > 1.0) gravity_ramp_factor_ = 1.0;
+    }
+}
+
 bool Control::bilateral_step() {
+    AdvanceGravityRamp();
+
     // get motor status
     std::vector<MotorState> arm_motor_states;
     const auto& arm_motors = openarm_->get_arm().get_motors();
@@ -172,8 +183,10 @@ bool Control::bilateral_step() {
                         joint_arm_velocities.size() + i);
 
     // set gravity and friciton comp joint torque value
+    // (gravity term ramped like openarm_hardware: ramp * scale * tau)
     for (size_t i = 0; i < arm_dof; i++) {
-        joint_arm_states_ref[i].effort = gravity_scale_ * gravity[i] + friction[i];
+        joint_arm_states_ref[i].effort =
+            gravity_ramp_factor_ * gravity_scale_ * gravity[i] + friction[i];
     }
 
     for (size_t i = 0; i < gripper_dof; i++) {
@@ -217,6 +230,8 @@ bool Control::bilateral_step() {
 }
 
 bool Control::unilateral_step() {
+    AdvanceGravityRamp();
+
     // get motor status
     std::vector<MotorState> arm_motor_states;
     for (const auto& motor : openarm_->get_arm().get_motors()) {
@@ -278,7 +293,8 @@ bool Control::unilateral_step() {
             joint_arm_state_torque[i].position = joint_arm_positions[i];
             joint_arm_state_torque[i].velocity = joint_arm_velocities[i];
             joint_arm_state_torque[i].effort =
-                gravity_scale_ * gravity[i] + friction[i] * 0.3 + coriolis[i] * 0.1;
+                gravity_ramp_factor_ * gravity_scale_ * gravity[i] + friction[i] * 0.3 +
+                coriolis[i] * 0.1;
         }
 
         // gripper joint state

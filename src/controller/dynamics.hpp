@@ -56,6 +56,13 @@ public:
     ~Dynamics();
 
     bool Init();
+    // Mirrors gravity_solver_valid_ in openarm_hardware/oy_hardware: true only
+    // when the KDL solver was built successfully. Callers must treat gravity
+    // compensation as disabled when this returns false.
+    bool IsValid() const;
+    // Number of joints in the KDL chain; callers validate it against the
+    // motor count like openarm_hardware's ARM_DOF check.
+    size_t GetJointCount() const;
     void GetGravity(const double *motor_position, double *gravity);
     void GetCoriolis(const double *motor_position, const double *motor_velocity, double *coriolis);
     void GetMassMatrixDiagonal(const double *motor_position, double *inertia_diag);
