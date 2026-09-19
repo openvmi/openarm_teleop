@@ -148,12 +148,15 @@ int main(int argc, char **argv) {
     try {
         std::signal(SIGINT, signal_handler);
 
-        // default configration
+        // default configuration
         std::string arm_side = "right_arm";
         std::string leader_urdf_path;
         std::string follower_urdf_path;
-        std::string leader_can_interface = "can0";
-        std::string follower_can_interface = "can2";
+
+        // Defaults follow the topology in leaderfollowerteleop.md section 2
+        // (right arm: leader=can2, follower=can0; the launch scripts pass these explicitly).
+        std::string leader_can_interface = "can2";
+        std::string follower_can_interface = "can0";
 
         if (argc < 3) {
             std::cerr << "Usage: " << argv[0]
@@ -224,7 +227,7 @@ int main(int argc, char **argv) {
         double leader_gravity_scale =
             leader_loader.has("LeaderArmParam", "gravity_compensation_scale")
                 ? leader_loader.get_double("LeaderArmParam", "gravity_compensation_scale")
-                : 1.0;
+                : 0.1;
 
         // Follower parameters
         std::vector<double> follower_kp = follower_loader.get_vector("FollowerArmParam", "Kp");
@@ -236,7 +239,7 @@ int main(int argc, char **argv) {
         double follower_gravity_scale =
             follower_loader.has("FollowerArmParam", "gravity_compensation_scale")
                 ? follower_loader.get_double("FollowerArmParam", "gravity_compensation_scale")
-                : 1.0;
+                : 0.1;
 
         // Optional: command-line gravity scale overrides (argv[6]/argv[7]),
         // applied after the yaml values so the CLI wins when provided.
