@@ -48,17 +48,7 @@ protected:
     void after_stop() override { std::cout << "leader stop thread " << std::endl; }
 
     void on_timer() override {
-        static auto prev_time = std::chrono::steady_clock::now();
-
         control_l_->bilateral_step();
-
-        auto now = std::chrono::steady_clock::now();
-
-        auto elapsed_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(now - prev_time).count();
-        prev_time = now;
-
-        // std::cout << "[Leader] Period: " << elapsed_us << " us" << std::endl;
     }
 
 private:
@@ -78,17 +68,7 @@ protected:
     void after_stop() override { std::cout << "follower stop thread " << std::endl; }
 
     void on_timer() override {
-        static auto prev_time = std::chrono::steady_clock::now();
-
         control_f_->bilateral_step();
-
-        auto now = std::chrono::steady_clock::now();
-
-        auto elapsed_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(now - prev_time).count();
-        prev_time = now;
-
-        // std::cout << "[Follower] Period: " << elapsed_us << " us" << std::endl;
     }
 
 private:
@@ -113,9 +93,6 @@ protected:
     void after_stop() override { std::cout << "admin stop thread " << std::endl; }
 
     void on_timer() override {
-        static auto prev_time = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-
         // get response
         auto leader_arm_resp = leader_state_->arm_state().get_all_responses();
         auto follower_arm_resp = follower_state_->arm_state().get_all_responses();
@@ -130,11 +107,6 @@ protected:
         follower_state_->arm_state().set_all_references(leader_arm_resp);
         follower_state_->hand_state().set_all_references(leader_hand_resp);
 
-        auto elapsed_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(now - prev_time).count();
-        prev_time = now;
-
-        // std::cout << "[Admin] Period: " << elapsed_us << " us" << std::endl;
     }
 
 private:

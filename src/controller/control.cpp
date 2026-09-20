@@ -26,13 +26,13 @@ Control::Control(openarm::can::socket::OpenArm* arm, Dynamics* dynamics_l, Dynam
                  std::shared_ptr<RobotSystemState> robot_state, double Ts, int role,
                  size_t arm_motor_num, size_t hand_motor_num)
     : openarm_(arm),
-      dynamics_l_(dynamics_l),
-      dynamics_f_(dynamics_f),
-      robot_state_(robot_state),
       Ts_(Ts),
       role_(role),
       arm_motor_num_(arm_motor_num),
-      hand_motor_num_(hand_motor_num) {
+      hand_motor_num_(hand_motor_num),
+      robot_state_(robot_state),
+      dynamics_f_(dynamics_f),
+      dynamics_l_(dynamics_l) {
     differentiator_ = new Differentiator(Ts);
     openarmjointconverter_ = new OpenArmJointConverter(arm_motor_num_);
     openarmgripperjointconverter_ = new OpenArmJGripperJointConverter(hand_motor_num_);
@@ -42,13 +42,13 @@ Control::Control(openarm::can::socket::OpenArm* arm, Dynamics* dynamics_l, Dynam
                  std::shared_ptr<RobotSystemState> robot_state, double Ts, int role,
                  std::string arm_type, size_t arm_motor_num, size_t hand_motor_num)
     : openarm_(arm),
-      dynamics_l_(dynamics_l),
-      dynamics_f_(dynamics_f),
-      robot_state_(robot_state),
       Ts_(Ts),
       role_(role),
       arm_motor_num_(arm_motor_num),
-      hand_motor_num_(hand_motor_num) {
+      hand_motor_num_(hand_motor_num),
+      robot_state_(robot_state),
+      dynamics_f_(dynamics_f),
+      dynamics_l_(dynamics_l) {
     differentiator_ = new Differentiator(Ts);
     openarmjointconverter_ = new OpenArmJointConverter(arm_motor_num_);
     openarmgripperjointconverter_ = new OpenArmJGripperJointConverter(hand_motor_num_);

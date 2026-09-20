@@ -116,8 +116,6 @@ bool Dynamics::Init() {
 }
 
 void Dynamics::GetGravity(const double *motor_position, double *gravity) {
-    const auto njoints = kdl_chain.getNrOfJoints();
-
     // Solver missing (Init() failed): leave the caller-prezeroed output at
     // zero, mirroring openarm_hardware's gravity_ok=false path — compensation
     // is skipped instead of dereferencing a null solver.
