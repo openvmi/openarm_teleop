@@ -30,12 +30,12 @@ LeaderArmParam:
   # coupling (how strongly the leader resists when the follower deviates).
   # Conservative start (~1/4 of the follower gains): raise gradually while
   # verifying the arms never oscillate.
-  Kp: [2.0, 2.0, 1.0, 1.0, 0.1, 0.1, 0.1, 0.1]
+  Kp: [2.0, 2.0, 1.0, 1.0, 0.2, 0.2, 0.2, 0.2]
   Kd: [2.0, 2.0, 1.5, 1.2, 0.2, 0.2, 0.2, 0.1]
   # Gravity-compensation feedforward scale, same semantics as
   # gravity_compensation_scale in openarm_hardware/oy_hardware
   # (1.0 = full compensation, 0.0 = disabled).
-  gravity_compensation_scale: 0.1
+  gravity_compensation_scale: 0.3
   # Friction compensation disabled for the first runs; tune after the
   # basic leader-follower loop is verified.
   Fc: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
