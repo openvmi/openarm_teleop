@@ -17,17 +17,50 @@
 #include <controller/control.hpp>
 #include <controller/dynamics.hpp>
 #include <csignal>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <openarm/can/socket/openarm.hpp>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
+#include <openarm/oy_motor/oy_motor_constants.hpp>
 #include <openarm_port/openarm_init.hpp>
 #include <periodic_timer_thread.hpp>
 #include <robot_state.hpp>
 #include <thread>
 #include <yamlloader.hpp>
 
+// Match the proven ROS 2 CAN worker cadence (8 request/reply pairs per bus).
+constexpr double UNILATERAL_FREQUENCY = 100.0;
 std::atomic<bool> keep_running(true);
+
+// Called by main, not by the CAN threads. Counters distinguish cached reads
+// from decoded frames; positions that remain still still count as updates.
+void print_feedback_stats(const char* side, Control* control,
+                          const RobotSystemState& state, Control::FeedbackStats& previous) {
+    const auto stats = control->GetFeedbackStats();
+    const auto samples = state.get_all_responses();
+    const auto now = std::chrono::steady_clock::now();
+    std::cout << "[CAN " << side << "] cycles=" << stats.cycles - previous.cycles
+              << " timeout=" << stats.timeouts - previous.timeouts << " updates=";
+    for (size_t i = 0; i < stats.updates.size(); ++i) {
+        const auto last = i < previous.updates.size() ? previous.updates[i] : 0;
+        std::cout << (i ? "," : "") << stats.updates[i] - last;
+    }
+    std::cout << " missing=";
+    for (size_t i = 0; i < stats.missing.size(); ++i) {
+        const auto last = i < previous.missing.size() ? previous.missing[i] : 0;
+        std::cout << (i ? "," : "") << stats.missing[i] - last;
+    }
+    std::cout << " age_ms=";
+    for (size_t i = 0; i < samples.size(); ++i) {
+        const auto age = samples[i].feedback_time.time_since_epoch().count() == 0
+            ? -1
+            : std::chrono::duration_cast<std::chrono::milliseconds>(
+                  now - samples[i].feedback_time).count();
+        std::cout << (i ? "," : "") << age;
+    }
+    std::cout << std::endl;
+    previous = stats;
+}
 
 void signal_handler(int signal) {
     if (signal == SIGINT) {
@@ -39,7 +72,7 @@ void signal_handler(int signal) {
 class LeaderArmThread : public PeriodicTimerThread {
 public:
     LeaderArmThread(std::shared_ptr<RobotSystemState> robot_state, Control *control_l,
-                    double hz = 500.0)
+                    double hz = UNILATERAL_FREQUENCY)
         : PeriodicTimerThread(hz), robot_state_(robot_state), control_l_(control_l) {}
 
 protected:
@@ -48,17 +81,7 @@ protected:
     void after_stop() override { std::cout << "leader stop thread " << std::endl; }
 
     void on_timer() override {
-        static auto prev_time = std::chrono::steady_clock::now();
-
         control_l_->unilateral_step();
-
-        auto now = std::chrono::steady_clock::now();
-
-        auto elapsed_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(now - prev_time).count();
-        prev_time = now;
-
-        // std::cout << "[Leader] Period: " << elapsed_us << " us" << std::endl;
     }
 
 private:
@@ -69,7 +92,7 @@ private:
 class FollowerArmThread : public PeriodicTimerThread {
 public:
     FollowerArmThread(std::shared_ptr<RobotSystemState> robot_state, Control *control_f,
-                      double hz = 500.0)
+                      double hz = UNILATERAL_FREQUENCY)
         : PeriodicTimerThread(hz), robot_state_(robot_state), control_f_(control_f) {}
 
 protected:
@@ -78,17 +101,7 @@ protected:
     void after_stop() override { std::cout << "follower stop thread " << std::endl; }
 
     void on_timer() override {
-        static auto prev_time = std::chrono::steady_clock::now();
-
         control_f_->unilateral_step();
-
-        auto now = std::chrono::steady_clock::now();
-
-        auto elapsed_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(now - prev_time).count();
-        prev_time = now;
-
-        // std::cout << "[Follower] Period: " << elapsed_us << " us" << std::endl;
     }
 
 private:
@@ -96,70 +109,28 @@ private:
     Control *control_f_;
 };
 
-class AdminThread : public PeriodicTimerThread {
-public:
-    AdminThread(std::shared_ptr<RobotSystemState> leader_state,
-                std::shared_ptr<RobotSystemState> follower_state, Control *control_l,
-                Control *control_f, double hz = 500.0)
-        : PeriodicTimerThread(hz),
-          leader_state_(leader_state),
-          follower_state_(follower_state),
-          control_l_(control_l),
-          control_f_(control_f) {}
-
-protected:
-    void before_start() override { std::cout << "admin start thread " << std::endl; }
-
-    void after_stop() override { std::cout << "admin stop thread " << std::endl; }
-
-    void on_timer() override {
-        static auto prev_time = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-
-        // get response
-        auto leader_arm_resp = leader_state_->arm_state().get_all_responses();
-        auto follower_arm_resp = follower_state_->arm_state().get_all_responses();
-
-        auto leader_hand_resp = leader_state_->hand_state().get_all_responses();
-        auto follower_hand_resp = follower_state_->hand_state().get_all_responses();
-
-        // set referense
-        leader_state_->arm_state().set_all_references(follower_arm_resp);
-        leader_state_->hand_state().set_all_references(follower_hand_resp);
-
-        follower_state_->arm_state().set_all_references(leader_arm_resp);
-        follower_state_->hand_state().set_all_references(leader_hand_resp);
-
-        auto elapsed_us =
-            std::chrono::duration_cast<std::chrono::microseconds>(now - prev_time).count();
-        prev_time = now;
-
-        // std::cout << "[Admin] Period: " << elapsed_us << " us" << std::endl;
-    }
-
-private:
-    std::shared_ptr<RobotSystemState> leader_state_;
-    std::shared_ptr<RobotSystemState> follower_state_;
-    Control *control_l_;
-    Control *control_f_;
-};
-
 int main(int argc, char **argv) {
     try {
         std::signal(SIGINT, signal_handler);
 
-        // default configration
+        // default configuration
         std::string arm_side = "right_arm";
         std::string leader_urdf_path;
         std::string follower_urdf_path;
-        std::string leader_can_interface = "can0";
-        std::string follower_can_interface = "can2";
+
+        // Defaults follow the topology in leaderfollowerteleop.md section 2
+        // (right arm: leader=can2, follower=can0; the launch scripts pass these explicitly).
+        std::string leader_can_interface = "can2";
+        std::string follower_can_interface = "can0";
 
         if (argc < 3) {
-            std::cerr
-                << "Usage: " << argv[0]
-                << " <leader_urdf_path> <follower_urdf_path> [arm_side] [leader_can] [follower_can]"
-                << std::endl;
+            std::cerr << "Usage: " << argv[0]
+                      << " <leader_urdf_path> <follower_urdf_path> [arm_side] [leader_can] "
+                         "[follower_can] [leader_gravity_scale] [follower_gravity_scale]"
+                      << std::endl;
+            std::cerr << "Note: gravity scales are optional CLI overrides of the yaml "
+                         "gravity_compensation_scale (leader.yaml / follower.yaml)."
+                      << std::endl;
             return 1;
         }
 
@@ -194,9 +165,9 @@ int main(int argc, char **argv) {
         }
 
         // Setup dynamics
-        std::string root_link = "openarm_body_link0";
-        std::string leaf_link =
-            (arm_side == "left_arm") ? "openarm_left_hand" : "openarm_right_hand";
+        std::string arm_prefix = (arm_side == "left_arm") ? "left_" : "right_";
+        std::string root_link = "openarm_" + arm_prefix + "link0";
+        std::string leaf_link = "openarm_" + arm_prefix + "hand";
 
         // Output confirmation
         std::cout << "=== OpenArm Unilateral Control ===" << std::endl;
@@ -218,6 +189,10 @@ int main(int argc, char **argv) {
         std::vector<double> leader_k = leader_loader.get_vector("LeaderArmParam", "k");
         std::vector<double> leader_Fv = leader_loader.get_vector("LeaderArmParam", "Fv");
         std::vector<double> leader_Fo = leader_loader.get_vector("LeaderArmParam", "Fo");
+        double leader_gravity_scale =
+            leader_loader.has("LeaderArmParam", "gravity_compensation_scale")
+                ? leader_loader.get_double("LeaderArmParam", "gravity_compensation_scale")
+                : 0.1;
 
         // Follower parameters
         std::vector<double> follower_kp = follower_loader.get_vector("FollowerArmParam", "Kp");
@@ -226,20 +201,42 @@ int main(int argc, char **argv) {
         std::vector<double> follower_k = follower_loader.get_vector("FollowerArmParam", "k");
         std::vector<double> follower_Fv = follower_loader.get_vector("FollowerArmParam", "Fv");
         std::vector<double> follower_Fo = follower_loader.get_vector("FollowerArmParam", "Fo");
+        double follower_gravity_scale =
+            follower_loader.has("FollowerArmParam", "gravity_compensation_scale")
+                ? follower_loader.get_double("FollowerArmParam", "gravity_compensation_scale")
+                : 0.1;
+
+        // Optional: command-line gravity scale overrides (argv[6]/argv[7]),
+        // applied after the yaml values so the CLI wins when provided.
+        if (argc >= 7) leader_gravity_scale = std::stod(argv[6]);
+        if (argc >= 8) follower_gravity_scale = std::stod(argv[7]);
+
+        std::cout << "Gravity comp scale - leader: " << leader_gravity_scale
+                  << ", follower: " << follower_gravity_scale << std::endl;
 
         Dynamics *leader_arm_dynamics = new Dynamics(leader_urdf_path, root_link, leaf_link);
-        leader_arm_dynamics->Init();
+        if (!leader_arm_dynamics->Init()) {
+            // Mirror openarm_hardware's graceful degradation: a failed KDL
+            // build disables gravity compensation instead of crashing later.
+            std::cerr << "[WARN] Leader dynamics init failed — "
+                         "gravity compensation DISABLED for leader"
+                      << std::endl;
+        }
 
         Dynamics *follower_arm_dynamics = new Dynamics(follower_urdf_path, root_link, leaf_link);
-        follower_arm_dynamics->Init();
+        if (!follower_arm_dynamics->Init()) {
+            std::cerr << "[WARN] Follower dynamics init failed — "
+                         "gravity compensation DISABLED for follower"
+                      << std::endl;
+        }
 
         std::cout << "=== Initializing Leader OpenArm ===" << std::endl;
         openarm::can::socket::OpenArm *leader_openarm =
-            openarm_init::OpenArmInitializer::initialize_openarm(leader_can_interface, true);
+            openarm_init::OpenArmInitializer::initialize_openarm(leader_can_interface, false);
 
         std::cout << "=== Initializing Follower OpenArm ===" << std::endl;
         openarm::can::socket::OpenArm *follower_openarm =
-            openarm_init::OpenArmInitializer::initialize_openarm(follower_can_interface, true);
+            openarm_init::OpenArmInitializer::initialize_openarm(follower_can_interface, false);
 
         size_t leader_arm_motor_num = leader_openarm->get_arm().get_motors().size();
         size_t follower_arm_motor_num = follower_openarm->get_arm().get_motors().size();
@@ -251,6 +248,29 @@ int main(int argc, char **argv) {
         std::cout << "leader hand motor num : " << leader_hand_motor_num << std::endl;
         std::cout << "follower hand motor num : " << follower_hand_motor_num << std::endl;
 
+        // Joint-count validation, mirroring openarm_hardware's
+        // "KDL chain has N joints, expected ARM_DOF — disabled" check.
+        if (leader_arm_dynamics->IsValid() &&
+            leader_arm_dynamics->GetJointCount() != leader_arm_motor_num) {
+            std::cerr << "[WARN] Leader KDL chain has "
+                      << leader_arm_dynamics->GetJointCount()
+                      << " joints, expected " << leader_arm_motor_num
+                      << " — gravity compensation DISABLED for leader" << std::endl;
+            leader_gravity_scale = 0.0;
+        } else if (!leader_arm_dynamics->IsValid()) {
+            leader_gravity_scale = 0.0;
+        }
+        if (follower_arm_dynamics->IsValid() &&
+            follower_arm_dynamics->GetJointCount() != follower_arm_motor_num) {
+            std::cerr << "[WARN] Follower KDL chain has "
+                      << follower_arm_dynamics->GetJointCount()
+                      << " joints, expected " << follower_arm_motor_num
+                      << " — gravity compensation DISABLED for follower" << std::endl;
+            follower_gravity_scale = 0.0;
+        } else if (!follower_arm_dynamics->IsValid()) {
+            follower_gravity_scale = 0.0;
+        }
+
         // Declare robot_state (Joint and motor counts are assumed to be equal)
         std::shared_ptr<RobotSystemState> leader_state =
             std::make_shared<RobotSystemState>(leader_arm_motor_num, leader_hand_motor_num);
@@ -260,10 +280,11 @@ int main(int argc, char **argv) {
 
         Control *control_leader = new Control(
             leader_openarm, leader_arm_dynamics, follower_arm_dynamics, leader_state,
-            1.0 / FREQUENCY, ROLE_LEADER, arm_side, leader_arm_motor_num, leader_hand_motor_num);
+            1.0 / UNILATERAL_FREQUENCY, ROLE_LEADER, arm_side,
+            leader_arm_motor_num, leader_hand_motor_num);
         Control *control_follower =
             new Control(follower_openarm, leader_arm_dynamics, follower_arm_dynamics,
-                        follower_state, 1.0 / FREQUENCY, ROLE_FOLLOWER, arm_side,
+                        follower_state, 1.0 / UNILATERAL_FREQUENCY, ROLE_FOLLOWER, arm_side,
                         follower_arm_motor_num, follower_hand_motor_num);
 
         control_leader->SetParameter(leader_kp, leader_kd, leader_Fc, leader_k, leader_Fv,
@@ -272,6 +293,9 @@ int main(int argc, char **argv) {
         control_follower->SetParameter(follower_kp, follower_kd, follower_Fc, follower_k,
                                        follower_Fv, follower_Fo);
 
+        control_leader->SetGravityCompensationScale(leader_gravity_scale);
+        control_follower->SetGravityCompensationScale(follower_gravity_scale);
+
         // set home postion
         std::thread thread_l(&Control::AdjustPosition, control_leader);
         std::thread thread_f(&Control::AdjustPosition, control_follower);
@@ -279,22 +303,30 @@ int main(int argc, char **argv) {
         thread_f.join();
 
         // Start control process
-        LeaderArmThread leader_thread(leader_state, control_leader, FREQUENCY);
-        FollowerArmThread follower_thread(follower_state, control_follower, FREQUENCY);
-        AdminThread admin_thread(leader_state, follower_state, control_leader, control_follower,
-                                 FREQUENCY);
+        LeaderArmThread leader_thread(leader_state, control_leader, UNILATERAL_FREQUENCY);
+        FollowerArmThread follower_thread(follower_state, control_follower, UNILATERAL_FREQUENCY);
+        control_follower->SetReferenceSource(leader_state);
+        std::cout << "CAN control: " << UNILATERAL_FREQUENCY
+                  << " Hz, per-motor feedback check, direct leader -> follower" << std::endl;
 
         leader_thread.start_thread();
         follower_thread.start_thread();
-        admin_thread.start_thread();
 
+        const char* diagnostics_env = std::getenv("OPENARM_TELEOP_DIAGNOSTICS");
+        const bool diagnostics = diagnostics_env && std::string(diagnostics_env) == "1";
+        Control::FeedbackStats previous_leader, previous_follower;
+        auto next_diagnostics = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         while (keep_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (diagnostics && std::chrono::steady_clock::now() >= next_diagnostics) {
+                print_feedback_stats("leader", control_leader, *leader_state, previous_leader);
+                print_feedback_stats("follower", control_follower, *follower_state, previous_follower);
+                next_diagnostics = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            }
         }
 
         leader_thread.stop_thread();
         follower_thread.stop_thread();
-        admin_thread.stop_thread();
 
         leader_openarm->disable_all();
         follower_openarm->disable_all();

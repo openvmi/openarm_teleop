@@ -15,58 +15,75 @@
 # limitations under the License.
 
 # ======== Configuration ========
-ARM_SIDE=${1:-right_arm}
-CAN_IF=${2:-can0}
-ARM_TYPE=${3:-v10}
+ARM_SIDE=${1:-right_arm}  # Required: left_arm or right_arm
+CAN_IF=$2                 # Optional: CAN interface
+GRAVITY_SCALE=$3          # Optional: gravity-compensation scale (default 1.0)
 TMPDIR="/tmp/openarm_urdf_gen"
-URDF_NAME="${ARM_TYPE}_bimanual.urdf"
-XACRO_FILE="${ARM_TYPE}.urdf.xacro"
-WS_DIR=~/openarm_ros2_ws
-XACRO_PATH="$WS_DIR/src/openarm_description/urdf/robot/$XACRO_FILE"
-URDF_OUT="$TMPDIR/$URDF_NAME"
-BIN_PATH=~/openarm_teleop/build/gravity_comp # adjust if needed
-# ===============================
-# Check workspace
-if [ ! -d "$WS_DIR" ]; then
-    echo "[ERROR] Could not find workspace at: $WS_DIR" >&2
-    echo "We assume the default ROS 2 workspace is ~/openarm_ros2_ws." >&2
-    echo "If you are using a different workspace, please update WS_DIR in this launch script." >&2
+
+WS_DIR=${OPENARM_WS:-/home/ligx/workspace/openarm}
+PKG_DIR="$WS_DIR/src/openarm_teleop"
+XACRO_PATH="$WS_DIR/src/openarm_description/urdf/robot/oy.urdf.xacro"
+URDF_OUT="$TMPDIR/oy_bimanual.urdf"
+BIN_PATH="$WS_DIR/build/openarm_teleop/gravity_comp"
+
+# Validate arm side
+if [[ "$ARM_SIDE" != "right_arm" && "$ARM_SIDE" != "left_arm" ]]; then
+    echo "[ERROR] Invalid arm_side: $ARM_SIDE"
+    echo "Usage: $0 <arm_side: right_arm|left_arm> [can_if] [gravity_scale]"
     exit 1
 fi
 
-# Check openarm_description package
-if [ ! -d "$WS_DIR/src/openarm_description" ]; then
-    echo "[ERROR] Could not find package: $WS_DIR/src/openarm_description" >&2
-    echo "Please make sure to clone openarm_description into $WS_DIR/src/" >&2
-    exit 1
+# Set default CAN interface if not provided (topology from init_can.sh:
+# can0=follower right, can1=follower left, can2=leader right, can3=leader left)
+if [ -z "$CAN_IF" ]; then
+    if [ "$ARM_SIDE" = "right_arm" ]; then
+        CAN_IF="can0"
+    else
+        CAN_IF="can1"
+    fi
 fi
 
-# Check xacro
+# Check xacro and binary
 if [ ! -f "$XACRO_PATH" ]; then
-    echo "[ERROR] Could not find ${XACRO_FILE} under $WS_DIR/src/openarm_description/urdf/robot/" >&2
+    echo "[ERROR] Could not find xacro: $XACRO_PATH" >&2
     exit 1
 fi
 
-# Check build binary
 if [ ! -f "$BIN_PATH" ]; then
-    echo "[ERROR] Compiled binary not found at: $BIN_PATH"
+    echo "[ERROR] Compiled binary not found at: $BIN_PATH" >&2
+    echo "Build first: cd $WS_DIR && colcon build --packages-select openarm_teleop" >&2
     exit 1
 fi
 
-# Generate URDF
-echo "[INFO] Generating URDF using xacro..."
+# Source ROS 2 and the workspace (xacro, openarm_description, OpenArmCAN cmake)
 # shellcheck source=/dev/null
-source $WS_DIR/install/setup.bash
+source /opt/ros/humble/setup.bash
+# shellcheck source=/dev/null
+source "$WS_DIR/install/setup.bash"
 
+# CAN bus is exclusive: teleop must not run together with ros2_control
+if pgrep -f ros2_control_node >/dev/null 2>&1; then
+    echo "[WARN] ros2_control_node is still running and will fight for the CAN bus." >&2
+    echo "       Stop the bringup stack first." >&2
+fi
+echo "[INFO] Make sure the CAN interface is configured: sudo bash $WS_DIR/init_can.sh"
+
+# Generate URDF (oy.urdf.xacro defaults: arm_type:=oy ee_type:=openarm_hand)
+echo "[INFO] Generating URDF using xacro..."
 mkdir -p "$TMPDIR"
 if ! xacro "$XACRO_PATH" bimanual:=true -o "$URDF_OUT"; then
     echo "[ERROR] Failed to generate URDF."
     exit 1
 fi
 
-# Run gravity compensation binary
+# Run binary from the package root
 echo "[INFO] Launching gravity compensation..."
-"$BIN_PATH" "$ARM_SIDE" "$CAN_IF" "$URDF_OUT"
+cd "$PKG_DIR"
+if [ -n "$GRAVITY_SCALE" ]; then
+    "$BIN_PATH" "$ARM_SIDE" "$CAN_IF" "$URDF_OUT" "$GRAVITY_SCALE"
+else
+    "$BIN_PATH" "$ARM_SIDE" "$CAN_IF" "$URDF_OUT"
+fi
 
 # Cleanup
 echo "[INFO] Cleaning up tmp dir..."

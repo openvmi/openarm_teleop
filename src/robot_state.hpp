@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <mutex>
 #include <vector>
 
@@ -22,6 +23,8 @@ struct JointState {
     double position = 0.0;
     double velocity = 0.0;
     double effort = 0.0;
+    // Timestamp of a decoded motor frame, not of a cached state read.
+    std::chrono::steady_clock::time_point feedback_time{};
 };
 
 // Manages reference and response states for a robot component (e.g., arm, hand).

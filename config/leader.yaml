@@ -26,9 +26,19 @@
   # -------------------------------------------------------
 
 LeaderArmParam:
-  Kp: [240.0, 240.0, 240.0, 240.0, 24.0, 31.0, 25.0, 16.0]
-  Kd: [3.0, 3.0, 3.0, 3.0, 0.2, 0.2, 0.2, 0.2]
-  Fc: [0.306,    0.306,   0.40,   0.166,   0.050,   0.083,  0.172,  0.0512]
-  k:  [28.417,  28.417,  29.065,  130.038, 151.771, 242.287, 7.888,  4.000]
-  Fv: [0.063,    0.0630,   0.604,   0.813,   0.029,   0.072,  0.084,  0.084]
-  Fo: [0.088,    0.088,   0.008,  -0.058,   0.005,   0.009, -0.059, -0.050]
+  # Kp/Kd = leader-side force-feedback stiffness/damping of the bilateral
+  # coupling (how strongly the leader resists when the follower deviates).
+  # Conservative start (~1/4 of the follower gains): raise gradually while
+  # verifying the arms never oscillate.
+  Kp: [2.0, 2.0, 1.0, 1.0, 0.2, 0.2, 0.2, 0.2]
+  Kd: [2.0, 2.0, 1.5, 1.2, 0.2, 0.2, 0.2, 0.1]
+  # Gravity-compensation feedforward scale, same semantics as
+  # gravity_compensation_scale in openarm_hardware/oy_hardware
+  # (1.0 = full compensation, 0.0 = disabled).
+  gravity_compensation_scale: 0.3
+  # Friction compensation disabled for the first runs; tune after the
+  # basic leader-follower loop is verified.
+  Fc: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  k:  [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  Fv: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+  Fo: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

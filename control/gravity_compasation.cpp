@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <controller/dynamics.hpp>
@@ -19,7 +20,7 @@
 #include <filesystem>
 #include <iostream>
 #include <openarm/can/socket/openarm.hpp>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
+#include <openarm/oy_motor/oy_motor_constants.hpp>
 #include <openarm_port/openarm_init.hpp>
 #include <thread>
 
@@ -40,9 +41,10 @@ int main(int argc, char** argv) {
         std::string can_interface = "can0";
 
         if (argc < 4) {
-            std::cerr << "Usage: " << argv[0] << " <arm_side> <can_interface> <urdf_path>"
+            std::cerr << "Usage: " << argv[0]
+                      << " <arm_side> <can_interface> <urdf_path> [gravity_scale]"
                       << std::endl;
-            std::cerr << "Example: " << argv[0] << " right_arm can0 /tmp/v10_bimanual.urdf"
+            std::cerr << "Example: " << argv[0] << " right_arm can0 /tmp/oy_bimanual.urdf 1.0"
                       << std::endl;
             return 1;
         }
@@ -50,6 +52,13 @@ int main(int argc, char** argv) {
         arm_side = argv[1];
         can_interface = argv[2];
         std::string urdf_path = argv[3];
+
+        // Optional: gravity-compensation scale (default 1.0), same semantics
+        // as gravity_compensation_scale in openarm_hardware/oy_hardware.
+        double gravity_scale = 1.0;
+        if (argc >= 5) {
+            gravity_scale = std::stod(argv[4]);
+        }
 
         if (arm_side != "left_arm" && arm_side != "right_arm") {
             std::cerr << "[ERROR] Invalid arm_side: " << arm_side
@@ -66,17 +75,24 @@ int main(int argc, char** argv) {
         std::cout << "Arm side       : " << arm_side << std::endl;
         std::cout << "CAN interface  : " << can_interface << std::endl;
         std::cout << "URDF path      : " << urdf_path << std::endl;
+        std::cout << "Gravity scale  : " << gravity_scale << std::endl;
 
-        std::string root_link = "openarm_body_link0";
-        std::string leaf_link =
-            (arm_side == "left_arm") ? "openarm_left_hand" : "openarm_right_hand";
+        std::string arm_prefix = (arm_side == "left_arm") ? "left_" : "right_";
+        std::string root_link = "openarm_" + arm_prefix + "link0";
+        std::string leaf_link = "openarm_" + arm_prefix + "hand";
 
         Dynamics arm_dynamics(urdf_path, root_link, leaf_link);
-        arm_dynamics.Init();
+        if (!arm_dynamics.Init()) {
+            // Mirror openarm_hardware: a failed KDL build must not be ignored —
+            // GetGravity() would otherwise stay unusable for the whole run.
+            std::cerr << "[ERROR] Dynamics init failed (bad URDF or missing chain "
+                      << root_link << " -> " << leaf_link << ")" << std::endl;
+            return 1;
+        }
 
         std::cout << "=== Initializing Leader OpenArm ===" << std::endl;
         openarm::can::socket::OpenArm* openarm =
-            openarm_init::OpenArmInitializer::initialize_openarm(can_interface, true);
+            openarm_init::OpenArmInitializer::initialize_openarm(can_interface, false);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         auto start_time = std::chrono::high_resolution_clock::now();
@@ -92,6 +108,12 @@ int main(int argc, char** argv) {
                                                      0.0);
 
         std::vector<double> grav_torques(openarm->get_arm().get_motors().size(), 0.0);
+
+        // Soft-start ramp, mirroring gravity_ramp_factor_ /
+        // GRAVITY_RAMP_DURATION in openarm_hardware/oy_hardware (0 -> 1 over
+        // 0.5 s) so full feedforward torque does not step in at startup.
+        constexpr double GRAVITY_RAMP_DURATION = 0.5;  // seconds
+        auto ramp_start_time = std::chrono::high_resolution_clock::now();
 
         while (keep_running) {
             frame_count++;
@@ -122,13 +144,22 @@ int main(int argc, char** argv) {
                 // std::cout << "grav_torques[" << i << "] = " << grav_torques[i] << std::endl;
             }
 
-            std::vector<openarm::damiao_motor::MITParam> cmds;
+            // NOTE: OY MITParam field order is {q, dq, kp, kd, tau}
+            std::vector<openarm::oy_motor::MITParam> cmds;
             cmds.reserve(grav_torques.size());
 
-            std::transform(grav_torques.begin(), grav_torques.end(), std::back_inserter(cmds),
-                           [](double t) { return openarm::damiao_motor::MITParam{0, 0, 0, 0, t}; });
+            const double ramp = std::min(
+                1.0, std::chrono::duration<double>(current_time - ramp_start_time).count() /
+                         GRAVITY_RAMP_DURATION);
 
-            openarm->get_arm().mit_control_all(cmds);
+            std::transform(
+                grav_torques.begin(), grav_torques.end(), std::back_inserter(cmds),
+                [gravity_scale, ramp](double t) {
+                    return openarm::oy_motor::MITParam{0, 0, 0, 0,
+                                                       ramp * gravity_scale * t};
+                });
+
+            openarm->get_arm().oy_mit_control_all(cmds);
 
             openarm->recv_all();
         }

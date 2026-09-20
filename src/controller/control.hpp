@@ -23,7 +23,7 @@
 #include <memory>
 #include <numeric>
 #include <openarm/can/socket/openarm.hpp>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
+#include <openarm/oy_motor/oy_motor_constants.hpp>
 #include <openarm_constants.hpp>
 #include <robot_state.hpp>
 #include <utility>
@@ -57,6 +57,29 @@ class Control {
     static constexpr int VEL_WINDOW_SIZE = 10;
     static constexpr double VIB_THRESHOLD = 0.7;  // [rad/s]
     std::deque<double> velocity_buffer_[NJOINTS];
+    std::shared_ptr<RobotSystemState> reference_source_;
+    void PublishFeedback();
+    void ReceiveFeedback();
+    void UpdateUnilateralReferences();
+
+public:
+    struct FeedbackStats {
+        uint64_t cycles = 0;
+        uint64_t timeouts = 0;
+        std::vector<uint64_t> updates;
+        std::vector<uint64_t> missing;
+    };
+    void SetReferenceSource(std::shared_ptr<RobotSystemState> source) {
+        reference_source_ = std::move(source);
+    }
+    FeedbackStats GetFeedbackStats() const {
+        std::lock_guard<std::mutex> lock(feedback_stats_mutex_);
+        return feedback_stats_;
+    }
+
+private:
+    mutable std::mutex feedback_stats_mutex_;
+    FeedbackStats feedback_stats_;
 
 public:
     Control(openarm::can::socket::OpenArm *arm, Dynamics *dynamics_l, Dynamics *dynamics_f,
@@ -71,6 +94,16 @@ public:
     std::shared_ptr<RobotSystemState> reference_;
 
     std::vector<double> Dn_, Kp_, Kd_, Fc_, k_, Fv_, Fo_;
+    // Scale factor applied to the gravity-compensation feedforward torque.
+    // Mirrors gravity_compensation_scale in openarm_hardware/oy_hardware.
+    double gravity_scale_ = 1.0;
+
+    // Gravity-compensation soft start, mirroring gravity_ramp_factor_ /
+    // GRAVITY_RAMP_DURATION in openarm_hardware/oy_hardware: ramps 0 -> 1 over
+    // 0.5 s so the feedforward torque does not step in at full magnitude the
+    // instant position holding starts. The ramp continues across mode handover.
+    double gravity_ramp_factor_ = 0.0;
+    static constexpr double GRAVITY_RAMP_DURATION = 0.5;  // seconds
 
     // bool Setup(void);
     void Setstate(int state);
@@ -79,6 +112,13 @@ public:
     void SetParameter(const std::vector<double> &Kp, const std::vector<double> &Kd,
                       const std::vector<double> &Fc, const std::vector<double> &k,
                       const std::vector<double> &Fv, const std::vector<double> &Fo);
+
+    // Set the gravity-compensation feedforward scale (default 1.0).
+    void SetGravityCompensationScale(double scale);
+
+    // Advance the gravity-compensation soft-start ramp by the supplied period,
+    // mirroring the ramp logic in openarm_hardware's write().
+    void AdvanceGravityRamp(double period);
 
     bool AdjustPosition(void);
 
@@ -95,7 +135,7 @@ public:
     void ComputeMotorTorque(const double *joint_torque, double *motor_torque);
 
     // void ComputeFriction(const double *velocity, double *friction);
-    void ComputeFriction(const double *velocity, double *friction, size_t index);
+    void ComputeFriction(double velocity, double *friction, size_t index);
     void ComputeGravity(const double *position, double *gravity);
     bool DetectVibration(const double *velocity, bool *what_axis);
 };

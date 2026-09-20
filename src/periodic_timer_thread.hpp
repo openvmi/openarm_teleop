@@ -49,7 +49,7 @@ public:
 protected:
     virtual void on_timer() = 0;
 
-    virtual void before_start() { set_thread_priority(50); }
+    virtual void before_start() {}
 
     virtual void after_stop() {}
 
@@ -70,9 +70,12 @@ protected:
 
 private:
     void start_thread_base() {
-        before_start();
         is_running_ = true;
-        pthread_create(&thread_, nullptr, &PeriodicTimerThread::thread_entry, this);
+        const int error = pthread_create(&thread_, nullptr, &PeriodicTimerThread::thread_entry, this);
+        if (error != 0) {
+            is_running_ = false;
+            throw std::runtime_error("Failed to create control thread: " + std::to_string(error));
+        }
     }
 
     void stop_thread_base() {
@@ -90,8 +93,9 @@ private:
     }
 
     void timer_thread() {
-        struct timespec next_time;
-        clock_gettime(CLOCK_MONOTONIC, &next_time);
+        set_thread_priority(50);
+        before_start();
+        auto next_time = std::chrono::steady_clock::now();
 
         while (is_running_) {
             auto start = std::chrono::steady_clock::now();
@@ -106,13 +110,11 @@ private:
             last_elapsed_us_.store(
                 std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
 
-            int period_us = period_us_.load();
-            next_time.tv_nsec += period_us * 1000;
-            while (next_time.tv_nsec >= 1000000000) {
-                next_time.tv_nsec -= 1000000000;
-                next_time.tv_sec += 1;
-            }
-            clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_time, nullptr);
+            const auto period = std::chrono::microseconds(period_us_.load());
+            next_time += period;
+            // Missed deadlines are discarded, never replayed as a burst of CAN writes.
+            if (next_time <= end) next_time = end + period;
+            std::this_thread::sleep_until(next_time);
         }
     }
 

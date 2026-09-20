@@ -17,7 +17,8 @@
 #include <csignal>
 #include <iostream>
 #include <openarm/can/socket/openarm.hpp>
-#include <openarm/damiao_motor/dm_motor_constants.hpp>
+#include <openarm/oy_motor/oy_motor_constants.hpp>
+#include <openarm_constants.hpp>
 #include <thread>
 
 int main(int argc, char** argv) {
@@ -32,27 +33,22 @@ int main(int argc, char** argv) {
 
         std::cout << "[INFO] Using CAN interface: " << can_interface << std::endl;
 
-        // Initialize OpenArm with CAN interface and enable CAN-FD
+        // Initialize OpenArm with CAN interface (classic CAN, matches init_can.sh 1 Mbps setup)
         std::cout << "Initializing OpenArm CAN..." << std::endl;
-        openarm::can::socket::OpenArm openarm(can_interface, true);  // Use CAN-FD on can0 interface
+        openarm::can::socket::OpenArm openarm(can_interface, false);  // Classic CAN frames
 
-        // Initialize arm motors
-        std::vector<openarm::damiao_motor::MotorType> motor_types = {
-            openarm::damiao_motor::MotorType::DM8009, openarm::damiao_motor::MotorType::DM8009,
-            openarm::damiao_motor::MotorType::DM4340, openarm::damiao_motor::MotorType::DM4340,
-            openarm::damiao_motor::MotorType::DM4310, openarm::damiao_motor::MotorType::DM4310,
-            openarm::damiao_motor::MotorType::DM4310};
-
-        std::vector<uint32_t> send_can_ids = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
-        std::vector<uint32_t> recv_can_ids = {0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
-        openarm.init_arm_motors(motor_types, send_can_ids, recv_can_ids);
+        // Initialize arm motors (OY motor configuration, same as DEFAULT_MOTOR_CONFIG)
+        const MotorConfig& config = DEFAULT_MOTOR_CONFIG;
+        openarm.init_arm_motors(config.arm_motor_types, config.arm_send_can_ids,
+                                config.arm_recv_can_ids);
 
         // Initialize gripper
         std::cout << "Initializing gripper..." << std::endl;
-        openarm.init_gripper_motor(openarm::damiao_motor::MotorType::DM4310, 0x08, 0x18);
+        openarm.init_gripper_motor(config.gripper_motor_type, config.gripper_send_can_id,
+                                   config.gripper_recv_can_id);
 
         // Set callback mode to ignore and refresh all motors
-        openarm.set_callback_mode_all(openarm::damiao_motor::CallbackMode::IGNORE);
+        openarm.set_callback_mode_all(openarm::oy_motor::CallbackMode::IGNORE);
         openarm.refresh_all();
         openarm.recv_all();
 
@@ -63,41 +59,39 @@ int main(int argc, char** argv) {
         openarm.recv_all();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-        // Set device mode to param and query motor id
-        std::cout << "\n=== Querying Motor IDs ===" << std::endl;
-        openarm.set_callback_mode_all(openarm::damiao_motor::CallbackMode::PARAM);
-        openarm.query_param_all(static_cast<int>(openarm::damiao_motor::RID::MST_ID));
+        // Switch to MIT state mode and print motor states
+        std::cout << "\n=== Querying Motor States (OY MIT) ===" << std::endl;
+        openarm.set_callback_mode_all(openarm::oy_motor::CallbackMode::STATE);
+        openarm.read_mit_state_all();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
         openarm.recv_all();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Access motors through components
         for (const auto& motor : openarm.get_arm().get_motors()) {
-            std::cout << "Arm Motor: " << motor.get_send_can_id() << " ID: "
-                      << motor.get_param(static_cast<int>(openarm::damiao_motor::RID::MST_ID))
-                      << std::endl;
+            std::cout << "Arm Motor: 0x" << std::hex << motor.get_send_can_id() << std::dec
+                      << " position: " << motor.get_position()
+                      << " velocity: " << motor.get_velocity()
+                      << " torque: " << motor.get_torque() << std::endl;
         }
         for (const auto& motor : openarm.get_gripper().get_motors()) {
-            std::cout << "Gripper Motor: " << motor.get_send_can_id() << " ID: "
-                      << motor.get_param(static_cast<int>(openarm::damiao_motor::RID::MST_ID))
-                      << std::endl;
+            std::cout << "Gripper Motor: 0x" << std::hex << motor.get_send_can_id() << std::dec
+                      << " position: " << motor.get_position()
+                      << " velocity: " << motor.get_velocity()
+                      << " torque: " << motor.get_torque() << std::endl;
         }
 
-        // Set device mode to state and control motor
+        // Control arm motors (zero-torque MIT command, NOTE: OY field order {q, dq, kp, kd, tau})
         std::cout << "\n=== Controlling Motors ===" << std::endl;
-        openarm.set_callback_mode_all(openarm::damiao_motor::CallbackMode::STATE);
+        openarm.get_arm().oy_mit_control_all({openarm::oy_motor::MITParam{0, 0, 0, 0, 0},
+                                              openarm::oy_motor::MITParam{0, 0, 0, 0, 0},
+                                              openarm::oy_motor::MITParam{0, 0, 0, 0, 0},
+                                              openarm::oy_motor::MITParam{0, 0, 0, 0, 0},
+                                              openarm::oy_motor::MITParam{0, 0, 0, 0, 0},
+                                              openarm::oy_motor::MITParam{0, 0, 0, 0, 0},
+                                              openarm::oy_motor::MITParam{0, 0, 0, 0, 0}});
 
-        // Control arm motors
-        openarm.get_arm().mit_control_all({openarm::damiao_motor::MITParam{0, 0, 0, 0, 0},
-                                           openarm::damiao_motor::MITParam{0, 0, 0, 0, 0},
-                                           openarm::damiao_motor::MITParam{0, 0, 0, 0, 0},
-                                           openarm::damiao_motor::MITParam{0, 0, 0, 0, 0},
-                                           openarm::damiao_motor::MITParam{0, 0, 0, 0, 0},
-                                           openarm::damiao_motor::MITParam{0, 0, 0, 0, 0},
-                                           openarm::damiao_motor::MITParam{0, 0, 0, 0, 0}});
-
-        openarm.get_gripper().mit_control_all({openarm::damiao_motor::MITParam{0, 0, 0, 0, 0}});
+        openarm.get_gripper().oy_mit_control_all({openarm::oy_motor::MITParam{0, 0, 0, 0, 0}});
 
         openarm.recv_all();
 
