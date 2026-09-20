@@ -25,6 +25,7 @@ endif()
 # -----------------------------
 # Find external packages
 # -----------------------------
+find_package(ament_cmake REQUIRED)
 find_package(OpenArmCAN REQUIRED)
 # find_package(urdf REQUIRED)
 find_package(orocos_kdl REQUIRED)
@@ -82,6 +83,9 @@ if(BUILD_TESTING)
   add_test(NAME teleop_feedback COMMAND teleop_feedback_test)
   add_test(NAME teleop_direct_reference COMMAND teleop_feedback_test direct)
   add_test(NAME teleop_feedback_timeout COMMAND teleop_feedback_test timeout)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME launch_install COMMAND ${Python3_EXECUTABLE}
+           ${CMAKE_CURRENT_SOURCE_DIR}/tests/launch_install_test.py)
   add_executable(periodic_timer_test tests/periodic_timer_test.cpp)
   target_include_directories(periodic_timer_test PRIVATE src)
   target_link_libraries(periodic_timer_test PRIVATE pthread)
@@ -97,3 +101,11 @@ if(BUILD_TESTING)
     add_test(NAME gravity_${case} COMMAND gravity_feedforward_test ${case})
   endforeach()
 endif()
+
+# Install runtime resources and register the package in the ROS package index.
+install(TARGETS gravity_comp comm_test unilateral_control bilateral_control
+        RUNTIME DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS script/launch_unilateral.sh script/launch_bilateral.sh
+        DESTINATION share/${PROJECT_NAME}/script)
+ament_package()

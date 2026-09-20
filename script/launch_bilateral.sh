@@ -20,13 +20,6 @@ LEADER_CAN_IF=$2           # Optional: leader CAN interface
 FOLLOWER_CAN_IF=$3         # Optional: follower CAN interface
 LEADER_GRAVITY_SCALE=$4    # Optional: leader gravity-compensation scale (overrides yaml)
 FOLLOWER_GRAVITY_SCALE=$5  # Optional: follower gravity-compensation scale (requires $4)
-TMPDIR="/tmp/openarm_urdf_gen"
-
-WS_DIR=${OPENARM_WS:-/home/ligx/workspace/openarm}
-PKG_DIR="$WS_DIR/src/openarm_teleop"
-XACRO_PATH="$WS_DIR/src/openarm_description/urdf/robot/oy.urdf.xacro"
-BIN_PATH="$WS_DIR/build/openarm_teleop/bilateral_control"
-
 # Validate arm side
 if [[ "$ARM_SIDE" != "right_arm" && "$ARM_SIDE" != "left_arm" ]]; then
     echo "[ERROR] Invalid arm_side: $ARM_SIDE"
@@ -52,47 +45,88 @@ if [ -z "$FOLLOWER_CAN_IF" ]; then
     fi
 fi
 
-# File paths
-LEADER_URDF_PATH="$TMPDIR/oy_leader.urdf"
-FOLLOWER_URDF_PATH="$TMPDIR/oy_follower.urdf"
+# Load the system ROS environment and the nearest install tree. local_setup
+# avoids replaying build-machine workspace paths embedded in setup.bash.
+if ! command -v ros2 >/dev/null 2>&1; then
+    ROS_SETUP="/opt/ros/${ROS_DISTRO:-humble}/setup.bash"
+    if [ -f "$ROS_SETUP" ]; then
+        source "$ROS_SETUP" || exit 1
+    fi
+fi
 
-# Check xacro and binary
+INSTALL_SETUP=""
+if [ -n "${OPENARM_WS:-}" ]; then
+    INSTALL_SETUP="$OPENARM_WS/install/local_setup.bash"
+    if [ ! -f "$INSTALL_SETUP" ]; then
+        echo "[ERROR] Install environment not found: $INSTALL_SETUP" >&2
+        exit 1
+    fi
+else
+    SEARCH_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd) || exit 1
+    while [ "$SEARCH_DIR" != / ]; do
+        if [ -f "$SEARCH_DIR/local_setup.bash" ]; then
+            INSTALL_SETUP="$SEARCH_DIR/local_setup.bash"
+            break
+        elif [ -f "$SEARCH_DIR/install/local_setup.bash" ]; then
+            INSTALL_SETUP="$SEARCH_DIR/install/local_setup.bash"
+            break
+        fi
+        SEARCH_DIR=$(dirname -- "$SEARCH_DIR")
+    done
+fi
+if [ -n "$INSTALL_SETUP" ]; then
+    source "$INSTALL_SETUP" || exit 1
+fi
+if ! command -v ros2 >/dev/null 2>&1; then
+    echo "[ERROR] ROS 2 is unavailable. Source your ROS and install environments first." >&2
+    exit 1
+fi
+
+# Resolve all runtime resources from the active ROS package index.
+DESCRIPTION_DIR=$(ros2 pkg prefix --share openarm_description) || exit 1
+PKG_DIR=$(ros2 pkg prefix --share openarm_teleop) || exit 1
+PKG_PREFIX=$(ros2 pkg prefix openarm_teleop) || exit 1
+XACRO_PATH="$DESCRIPTION_DIR/urdf/robot/oy.urdf.xacro"
+BIN_PATH="$PKG_PREFIX/lib/openarm_teleop/bilateral_control"
 if [ ! -f "$XACRO_PATH" ]; then
-    echo "[ERROR] Could not find xacro: $XACRO_PATH" >&2
+    echo "[ERROR] Could not find installed xacro: $XACRO_PATH" >&2
     exit 1
 fi
-
-if [ ! -f "$BIN_PATH" ]; then
-    echo "[ERROR] Compiled binary not found at: $BIN_PATH" >&2
-    echo "Build first: cd $WS_DIR && colcon build --packages-select openarm_teleop" >&2
+if [ ! -x "$BIN_PATH" ]; then
+    echo "[ERROR] Installed executable not found: $BIN_PATH" >&2
+    echo "Rebuild and install openarm_teleop: colcon build --packages-select openarm_teleop" >&2
     exit 1
 fi
+for CONFIG in leader follower; do
+    if [ ! -f "$PKG_DIR/config/$CONFIG.yaml" ]; then
+        echo "[ERROR] Installed configuration not found: $PKG_DIR/config/$CONFIG.yaml" >&2
+        exit 1
+    fi
+done
 
-# Source ROS 2 and the workspace (xacro, openarm_description, OpenArmCAN cmake)
-# shellcheck source=/dev/null
-source /opt/ros/humble/setup.bash
-# shellcheck source=/dev/null
-source "$WS_DIR/install/setup.bash"
+URDF_DIR=$(mktemp -d "${TMPDIR:-/tmp}/openarm_urdf_gen.XXXXXX") || exit 1
+trap 'rm -rf -- "$URDF_DIR"' EXIT
+LEADER_URDF_PATH="$URDF_DIR/oy_leader.urdf"
+FOLLOWER_URDF_PATH="$URDF_DIR/oy_follower.urdf"
 
 # CAN bus is exclusive: teleop must not run together with ros2_control
 if pgrep -f ros2_control_node >/dev/null 2>&1; then
     echo "[WARN] ros2_control_node is still running and will fight for the CAN bus." >&2
     echo "       Stop the bringup stack first." >&2
 fi
-echo "[INFO] Make sure the CAN interfaces are configured: sudo bash $WS_DIR/init_can.sh"
+echo "[INFO] Make sure the CAN interfaces are configured: $LEADER_CAN_IF and $FOLLOWER_CAN_IF"
 
 # Generate URDFs (oy.urdf.xacro defaults: arm_type:=oy ee_type:=openarm_hand)
 echo "[INFO] Generating URDFs using xacro..."
-mkdir -p "$TMPDIR"
 if ! xacro "$XACRO_PATH" bimanual:=true -o "$LEADER_URDF_PATH"; then
     echo "[ERROR] Failed to generate URDFs."
     exit 1
 fi
-cp "$LEADER_URDF_PATH" "$FOLLOWER_URDF_PATH"
+cp "$LEADER_URDF_PATH" "$FOLLOWER_URDF_PATH" || exit 1
 
 # Run binary from the package root (YamlLoader loads relative config/*.yaml)
 echo "[INFO] Launching bilateral control..."
-cd "$PKG_DIR"
+cd "$PKG_DIR" || exit 1
 
 # Pass gravity scale overrides when provided (follower scale requires the
 # leader scale due to positional argument order).
@@ -110,6 +144,4 @@ fi
 
 "$BIN_PATH" "$LEADER_URDF_PATH" "$FOLLOWER_URDF_PATH" "$ARM_SIDE" "$LEADER_CAN_IF" "$FOLLOWER_CAN_IF" "${GRAVITY_SCALE_ARGS[@]}"
 
-# Cleanup
-echo "[INFO] Cleaning up temporary files..."
-rm -rf "$TMPDIR"
+exit $?
